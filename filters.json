@@ -1,0 +1,238 @@
+{
+  "inputs": {
+    "directory": "./enamine",
+    "amines": [
+      "amines*.sdf"
+    ],
+    "alcohols": null,
+    "aldehydes": [
+      "aldehyde*.sdf"
+    ],
+    "ketones": null,
+    "ester_carboxyl": null,
+    "halides": null
+  },
+  "output_dir": "./triazine_output",
+  "workers": 4,
+  "standardization": {
+    "fragment_parent": true,
+    "uncharge": true
+  },
+  "routes": {
+    "p1_amines": true,
+    "p1_alcohols": false,
+    "reductive_amination": true,
+    "sn2": false,
+    "direct_secondary_amines": true,
+    "alcohol_to_aldehyde": false,
+    "aldehyde_to_alcohol": false,
+    "ester_to_aldehyde": false,
+    "acid_to_aldehyde": false,
+    "ester_to_alcohol": false,
+    "acid_to_alcohol": false,
+    "nitrile_to_amine": false,
+    "imine_to_amine": false
+  },
+  "filters": {
+    "p1": {
+      "enabled": true,
+      "properties": {
+        "MW": {
+          "min": null,
+          "max": 160
+        },
+        "logP": {
+          "min": null,
+          "max": 3
+        },
+        "TPSA": {
+          "min": null,
+          "max": 60
+        },
+        "HBD": {
+          "min": null,
+          "max": 1
+        },
+        "RotBonds": {
+          "min": null,
+          "max": 3
+        },
+        "AromaticRings": {
+          "min": null,
+          "max": 1
+        }
+      },
+      "required_smarts": [],
+      "excluded_smarts": []
+    },
+    "p2_precursor": {
+      "enabled": true,
+      "properties": {
+        "MW": {
+          "min": null,
+          "max": 250
+        },
+        "logP": {
+          "min": null,
+          "max": 4
+        },
+        "TPSA": {
+          "min": null,
+          "max": 80
+        },
+        "HBD": {
+          "min": null,
+          "max": 2
+        },
+        "RotBonds": {
+          "min": null,
+          "max": 5
+        },
+        "AromaticRings": {
+          "min": null,
+          "max": 2
+        }
+      },
+      "required_smarts": [],
+      "excluded_smarts": []
+    },
+    "p3_precursor": {
+      "enabled": true,
+      "properties": {
+        "MW": {
+          "min": null,
+          "max": 300
+        },
+        "logP": {
+          "min": null,
+          "max": 4.5
+        },
+        "TPSA": {
+          "min": null,
+          "max": 60
+        },
+        "HBD": {
+          "min": null,
+          "max": 2
+        },
+        "RotBonds": {
+          "min": null,
+          "max": 5
+        },
+        "AromaticRings": {
+          "min": null,
+          "max": 2
+        }
+      },
+      "required_smarts": [],
+      "excluded_smarts": []
+    },
+    "p23": {
+      "enabled": true,
+      "properties": {
+        "MW": {
+          "min": null,
+          "max": 350
+        },
+        "logP": {
+          "min": null,
+          "max": 4.5
+        },
+        "TPSA": {
+          "min": null,
+          "max": 80
+        },
+        "HBD": {
+          "min": null,
+          "max": 2
+        },
+        "RotBonds": {
+          "min": null,
+          "max": 7
+        },
+        "AromaticRings": {
+          "min": null,
+          "max": 2
+        }
+      },
+      "required_smarts": [],
+      "excluded_smarts": []
+    },
+    "final": {
+      "enabled": true,
+      "properties": {
+        "MW": {
+          "min": null,
+          "max": 525
+        },
+        "logP": {
+          "min": null,
+          "max": 4.5
+        },
+        "TPSA": {
+          "min": null,
+          "max": 110
+        },
+        "HBD": {
+          "min": null,
+          "max": 2
+        },
+        "RotBonds": {
+          "min": null,
+          "max": 12
+        },
+        "AromaticRings": {
+          "min": null,
+          "max": 3
+        }
+      },
+      "required_smarts": [],
+      "excluded_smarts": []
+    },
+    "preferred": {
+      "enabled": true,
+      "properties": {
+        "MW": {
+          "min": null,
+          "max": 450
+        },
+        "logP": {
+          "min": null,
+          "max": 3.5
+        },
+        "TPSA": {
+          "min": null,
+          "max": 90
+        },
+        "HBD": {
+          "min": null,
+          "max": 1
+        },
+        "RotBonds": {
+          "min": null,
+          "max": 8
+        },
+        "AromaticRings": {
+          "min": null,
+          "max": 2
+        }
+      },
+      "required_smarts": [],
+      "excluded_smarts": []
+    }
+  },
+  "diversity": {
+    "seed": 42,
+    "pool_limits": {
+      "p1_amines": 40,
+      "p1_alcohols": 20,
+      "p2_precursors": 400,
+      "p3_carbonyls": 400,
+      "p3_halides": 200,
+      "p23_arms": 1500
+    },
+    "final_pick_count": 500,
+    "final_candidate_limit": 20000,
+    "final_max_similarity": 0.85
+  }
+}
