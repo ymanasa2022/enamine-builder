@@ -1,0 +1,87 @@
+[
+  {
+    "name": "1 final",
+    "stage": "final",
+    "smiles": "N#Cc1nc(N2CCOCC2)nc(N(Cc2ccc(F)cc2)CCN(CC)CC)n1"
+  },
+  {
+    "name": "1 free arm",
+    "stage": "p23",
+    "smiles": "N(Cc2ccc(F)cc2)CCN(CC)CC"
+  },
+  {
+    "name": "12 final",
+    "stage": "final",
+    "smiles": "N#Cc1nc(N2CCOCC2)nc(N(C(c2ccc(F)cc2)C2CCCCC2)CCN(CC)CC)n1"
+  },
+  {
+    "name": "12 free arm",
+    "stage": "p23",
+    "smiles": "N(C(c2ccc(F)cc2)C2CCCCC2)CCN(CC)CC"
+  },
+  {
+    "name": "13 final",
+    "stage": "final",
+    "smiles": "N#Cc1nc(N2CCOCC2)nc(N(C(c2ccc(F)cc2)C2CCCCCC2)CCN(CC)CC)n1"
+  },
+  {
+    "name": "13 free arm",
+    "stage": "p23",
+    "smiles": "N(C(c2ccc(F)cc2)C2CCCCCC2)CCN(CC)CC"
+  },
+  {
+    "name": "18 final",
+    "stage": "final",
+    "smiles": "N#Cc1nc(N2CCOCC2)nc(N(C(c2ccc(F)cc2)C2CCCCC2)CCC2CCNCC2)n1"
+  },
+  {
+    "name": "18 free arm",
+    "stage": "p23",
+    "smiles": "N(C(c2ccc(F)cc2)C2CCCCC2)CCC2CCNCC2"
+  },
+  {
+    "name": "19 final",
+    "stage": "final",
+    "smiles": "N#Cc1nc(N2CCOCC2)nc(N(C(c2ccc(F)cc2)C2CCCCC2)CCC2CCN(C)CC2)n1"
+  },
+  {
+    "name": "19 free arm",
+    "stage": "p23",
+    "smiles": "N(C(c2ccc(F)cc2)C2CCCCC2)CCC2CCN(C)CC2"
+  },
+  {
+    "name": "morpholine P1",
+    "stage": "p1",
+    "smiles": "O1CCNCC1"
+  },
+  {
+    "name": "12 primary amine",
+    "stage": "p2_precursor",
+    "smiles": "NC(c2ccc(F)cc2)C2CCCCC2"
+  },
+  {
+    "name": "12 carbonyl",
+    "stage": "p3_precursor",
+    "smiles": "O=CCN(CC)CC"
+  },
+  {
+    "name": "13 primary amine",
+    "stage": "p2_precursor",
+    "smiles": "NC(c2ccc(F)cc2)C2CCCCCC2"
+  },
+  {
+    "name": "13 carbonyl",
+    "stage": "p3_precursor",
+    "smiles": "O=CCN(CC)CC"
+  },
+  {
+    "name": "18 primary amine",
+    "stage": "p2_precursor",
+    "smiles": "NC(c2ccc(F)cc2)C2CCCCC2"
+  },
+  {
+    "name": "18 carbonyl",
+    "stage": "p3_precursor",
+    "smiles": "O=CCC2CCNCC2"
+  }
+]

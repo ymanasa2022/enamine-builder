@@ -24,14 +24,16 @@
     "reductive_amination": true,
     "sn2": false,
     "direct_secondary_amines": true,
-    "alcohol_to_aldehyde": false,
-    "aldehyde_to_alcohol": false,
+    "alcohol_to_aldehyde": true,
+    "aldehyde_to_alcohol": true,
     "ester_to_aldehyde": false,
     "acid_to_aldehyde": false,
     "ester_to_alcohol": false,
     "acid_to_alcohol": false,
     "nitrile_to_amine": false,
-    "imine_to_amine": false
+    "imine_to_amine": false,
+    "secondary_alcohol_to_ketone": true,
+    "ketone_to_secondary_alcohol": true
   },
   "filters": {
     "p1": {
@@ -136,7 +138,7 @@
         },
         "logP": {
           "min": null,
-          "max": 4.5
+          "max": 5.0
         },
         "TPSA": {
           "min": null,
@@ -148,7 +150,7 @@
         },
         "RotBonds": {
           "min": null,
-          "max": 7
+          "max": 8
         },
         "AromaticRings": {
           "min": null,
@@ -167,7 +169,7 @@
         },
         "logP": {
           "min": null,
-          "max": 4.5
+          "max": 5.0
         },
         "TPSA": {
           "min": null,
@@ -234,5 +236,9 @@
     "final_pick_count": 500,
     "final_candidate_limit": 20000,
     "final_max_similarity": 0.85
+  },
+  "conversions": {
+    "max_steps": 2,
+    "max_products_per_source": 100
   }
 }

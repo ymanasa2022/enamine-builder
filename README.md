@@ -19,7 +19,7 @@ e.g. "amines*.sdf", not the old command-line prefixes. Each input accepts a
 string, an array of patterns, or null. Relative input directory and output paths
 resolve relative to the JSON file. Amine input is required for enumeration;
 aldehydes and all other pools can be null when using direct secondary amines.
-A configured pattern that matches nothing is an error. Use null for unused inputs.
+Source-file labels locate input files; molecules are classified by their actual functional groups after conversion, so one source can supply several pools. A configured pattern that matches nothing is an error. Use null for unused inputs.
 Choose a new output_dir for each run; existing enumeration results are protected.
 
 ## Reduce an existing 17-million-molecule CSV
@@ -69,11 +69,53 @@ Stages:
 | final | Actual assembled molecule; hard retention filter |
 | preferred | Actual assembled molecule; annotation only, does not discard |
 
+## Functional-group interconversion
+
+Conversion expansion now happens BEFORE role classification and filtering.
+Starting structures are retained; enabled transformations generate additional
+variants that are classified into all compatible pools. Primary and secondary
+alcohols can therefore supply carbonyls for arm construction, while aldehydes
+and ketones can supply alcohols for the optional P1 ether branch.
+
+| JSON route switch | Transformation |
+|---|---|
+| alcohol_to_aldehyde | Primary alcohol -> aldehyde |
+| aldehyde_to_alcohol | Aldehyde -> primary alcohol |
+| secondary_alcohol_to_ketone | Secondary alcohol -> ketone |
+| ketone_to_secondary_alcohol | Ketone -> secondary alcohol |
+| ester_to_aldehyde / acid_to_aldehyde | Ester or acid -> aldehyde |
+| ester_to_alcohol / acid_to_alcohol | Ester or acid -> primary alcohol |
+| nitrile_to_amine / imine_to_amine | Nitrile or NH-imine -> primary amine |
+
+The four alcohol/carbonyl switches are ENABLED in the supplied JSON. Other
+conversion switches remain disabled. Enabling conversion does not enable P1
+alcohol SNAr automatically: set routes.p1_alcohols to true for that branch.
+
+conversions.max_steps defaults to 2. This allows sequential changes at multiple
+functional groups; set 1 for only single-step variants or 0 for no expansion.
+Each unique canonical structure is visited once per original source, preventing
+alcohol/carbonyl cycles from producing infinite repeats. One shortest conversion
+path is retained per source/structure. Routes returning the same structure are
+not all enumerated as distinct provenance records.
+
+conversions.max_products_per_source defaults to 100 derived structures. Exceeding
+it stops with an explicit error rather than silently dropping variants. This
+limit and depth limit keep expansion bounded for multifunctional molecules.
+conversion_provenance.csv records original entries and their retained conversion
+paths BEFORE role filters and diversity selection. Pool alias files preserve
+those path names through subsequent exact deduplication.
+
+Secondary-alcohol oxidation removes stereochemistry at the oxidized carbon.
+Ketone reduction generates unspecified stereochemistry at any new center.
+Other supplied stereocenters are retained. Tertiary alcohols are not oxidized by
+this rule; ester and amide carbonyls are not treated as ketones. The chemistry
+rules do not assess protecting-group or chemoselectivity requirements.
+
 The precursor P2/P3 labels describe synthetic inputs. They do not establish the
 bound S2/S3 orientation. Reversing the amine/carbonyl input roles may generate the
 same arm; exact arm deduplication handles that.
 
-The shipped settings retain final MW <=525, logP <=4.5, TPSA <=110, HBD <=2 and
+The shipped settings retain final MW <=525, logP <=5.0, TPSA <=110, HBD <=2 and
 RotBonds <=12. The preferred annotation uses tighter values (450, 3.5, 90, 1, 8).
 These are starting heuristics for SAR exploration, not validated CNS exposure rules.
 No minimum MW/logP is imposed. A strong base is not automatically rejected.
@@ -152,8 +194,9 @@ catalog entries do not multiply the retained block pool under default normalizat
   produce alternative attachment products. Protecting groups are not removed automatically.
 - Exclude amide/sulfonamide nitrogens from primary/secondary attaching amines.
 - Optional SN2 uses methyl/primary sp3 chlorides, bromides and iodides, excluding fluorides.
-- Optional precursor conversions are OFF by default. Enabling them represents
-  a proposed multistep synthetic route, not a reagent directly ready for SNAr.
+- Alcohol/carbonyl interconversions are ON in the supplied JSON; other precursor
+  conversions are OFF. Each conversion represents a proposed synthetic step,
+  not a reagent directly ready for SNAr.
 - P1 alcohol substitution is an optional exploratory branch, disabled by default;
   it is not inferred to be supported by the uploaded paper's morpholine SAR.
 
@@ -170,6 +213,7 @@ P1/P2/P3 labels are intended design roles, not experimentally determined binding
   including blocks not selected by the diversity budget.
 - props_*.csv: selected pools and their descriptors.
 - products.sqlite: unique products, representative JSON record and surviving route count.
+- conversion_provenance.csv: source entries and retained conversion paths.
 - config_used.json and summary.json: settings and counts for reproducibility.
 
 For duplicate final products, the first representative route is retained and
@@ -191,6 +235,41 @@ python -m unittest discover -s . -v
 Tests cover reaction connectivity, preservation of both ketone branches,
 triazine-specific substitution, salt deduplication, stereoisomer retention,
 filter boundaries and validation, reproducible diversity selection, final
-similarity limits, serial/parallel equivalence, existing-CSV selection and empty outputs.
+similarity limits, serial/parallel equivalence, existing-CSV selection, empty outputs,
+secondary-alcohol/ketone conversion, bounded network expansion, cycle prevention,
+and routing converted alcohols into carbonyl arm construction.
 No real ENAMINE SDFs or 17-million-row input were supplied, so full-scale runtime
 and memory use have not been benchmarked.
+
+## SAR alignment update
+
+The combined-arm and final hard cLogP ceilings are now 5.0 (previously 4.5).
+The combined-arm RotBonds ceiling is now 8 (previously 7): free arms for the
+selective cyclohexyl/cycloheptyl references 12 and 13 have eight RDKit rotatable
+bonds. Preferred final settings remain annotation-only and unchanged.
+The triazine counts as one aromatic ring. Basic amines are retained, with no
+pKa or logD prediction. These ceilings preserve SAR exploration; they do not
+validate CNS exposure. No universal structural exclusion is added for benzylic
+gem-disubstitution, and no docking-based pocket assignment is enforced.
+
+Run the editable reference audit before enumeration:
+
+```bash
+python check_sar_filters.py --config filters.json --output sar_filter_audit.csv
+```
+
+sar_references.json contains neutral structures reconstructed from the uploaded
+SI names for compounds 1, 12, 13, 18 and 19, their free combined arms, morpholine,
+and selected compatible reductive-amination precursors. This is a limited
+reference panel, not all paper compounds or every synthetic route. Add your
+own stage/name/smiles records and run again after changing filters. The report
+lists exact rejection reasons, descriptors, final preferred flags and a
+logP_above_4_5 flag. Exit status is 1 if any reference is rejected.
+The audit does not guarantee inclusion after finite diversity selection, and
+new stereocenters are still unspecified unless supplied explicitly.
+
+All 17 supplied reference records pass the revised hard filters. Reference 13
+has RDKit cLogP about 4.58 and would fail the old final cutoff. Reference 18
+has TPSA about 90.2 and fails the preferred flag, but passes the hard filter.
+The existing canonical isomeric SMILES and chiral Morgan fingerprints already
+preserve supplied stereochemistry; no change was needed to those algorithms.

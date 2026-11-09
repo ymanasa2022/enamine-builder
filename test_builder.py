@@ -73,6 +73,52 @@ class BuilderTests(unittest.TestCase):
             for other in fps[:i]:
                 self.assertLessEqual(DataStructs.TanimotoSimilarity(fp, other), 0.5 + 1e-9)
 
+    def test_secondary_alcohol_ketone_conversion(self):
+        self.assertEqual(self.products('secondary_alcohol_to_ketone', 'C[C@H](O)c1ccccc1'), {'CC(=O)c1ccccc1'})
+        self.assertEqual(self.products('ketone_to_secondary_alcohol', 'CC(=O)c1ccccc1'), {'CC(O)c1ccccc1'})
+        self.assertEqual(self.products('secondary_alcohol_to_ketone', 'CC(C)(O)c1ccccc1'), set())
+        self.assertEqual(self.products('ketone_to_secondary_alcohol', 'CC(=O)OC'), set())
+        self.assertEqual(self.products('ketone_to_secondary_alcohol', 'CC(=O)NC'), set())
+
+    def test_conversion_network_depth_cycles_and_limits(self):
+        routes = {'secondary_alcohol_to_ketone': True, 'ketone_to_secondary_alcohol': True}
+        expanded = b.expand_conversions({'alcohol': 'CC(O)c1ccccc1'}, routes, {'max_steps': 5})
+        self.assertEqual(set(expanded.values()), {'CC(O)c1ccccc1', 'CC(=O)c1ccccc1'})
+        self.assertEqual(len(expanded), 2)
+        route = {'alcohol_to_aldehyde': True}
+        one = b.expand_conversions({'diol': 'OCCCO'}, route, {'max_steps': 1})
+        two = b.expand_conversions({'diol': 'OCCCO'}, route, {'max_steps': 2})
+        self.assertNotIn('O=CCC=O', one.values())
+        self.assertIn('O=CCC=O', two.values())
+        with self.assertRaisesRegex(ValueError, 'Conversion limit exceeded'):
+            b.expand_conversions({'diol': 'OCCCO'}, route, {'max_steps': 2, 'max_products_per_source': 1})
+        self.assertEqual(b.expand_conversions({'a': 'CCO'}, route, {'max_steps': 0}), {'a': 'CCO'})
+
+    def test_reductive_amination_preserves_other_carbonyl_types(self):
+        products = self.products('reductive_am', 'CN', 'COC(=O)c1ccc(C=O)cc1')
+        self.assertEqual(products, {'CNCc1ccc(C(=O)OC)cc1'})
+
+    def test_converted_secondary_alcohol_enters_arm_building(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Functional groups, rather than source-file labels, determine roles.
+            writer = Chem.SDWriter(str(root / 'mixed.sdf'))
+            for smi in ['CN', 'O1CCNCC1', 'CC(O)c1ccccc1']:
+                writer.write(b.molecule(smi))
+            writer.close()
+            c = {'inputs': {'amines': 'mixed.sdf'}, 'output_dir': 'out', 'workers': 1,
+                 'routes': {'secondary_alcohol_to_ketone': True, 'p1_alcohols': False},
+                 'conversions': {'max_steps': 2}}
+            b.validate_config(c)
+            b.run(c, root)
+            with (root / 'out' / 'props_p3_carbonyls.csv').open() as f:
+                carbonyls = list(csv.DictReader(f))
+            self.assertEqual([r['smiles'] for r in carbonyls], ['CC(=O)c1ccccc1'])
+            with (root / 'out' / 'props_p23_arms.csv').open() as f:
+                arms = list(csv.DictReader(f))
+            self.assertIn('CNC(C)c1ccccc1', [r['smiles'] for r in arms])
+            self.assertTrue((root / 'out' / 'conversion_provenance.csv').exists())
+
     def test_end_to_end_serial_parallel_empty_and_existing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

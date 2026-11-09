@@ -34,10 +34,12 @@ TRIAZINE = '[c:1]1([Cl])[n:4][c:5][n:6][c:7][n:8]1'
 RXN = {
     'snar_n': AllChem.ReactionFromSmarts(TRIAZINE + '.' + SECONDARY[:-1] + ':3]>>[c:1]1([N:3])[n:4][c:5][n:6][c:7][n:8]1'),
     'snar_o': AllChem.ReactionFromSmarts(TRIAZINE + '.[O;X2;H1:3]-[C;X4:2]>>[c:1]1([O:3][C:2])[n:4][c:5][n:6][c:7][n:8]1'),
-    'reductive_am': AllChem.ReactionFromSmarts(PRIMARY[:-1] + ':1].[C;X3;H1,H0:2]=[O]>>[N:1]-[C:2]'),
+    'reductive_am': AllChem.ReactionFromSmarts(PRIMARY[:-1] + ':1].[C;X3;H1,H0;!$(C-[N,O,S]);$([C]-[#6]):2]=[O]>>[N:1]-[C:2]'),
     'sn2': AllChem.ReactionFromSmarts(PRIMARY[:-1] + ':1].[C;X4;H2,H3:2]-[Cl,Br,I]>>[N:1]-[C:2]'),
     'alcohol_to_aldehyde': AllChem.ReactionFromSmarts('[C;X4;H2:1]-[O;H1:2]>>[CH:1]=[O:2]'),
-    'aldehyde_to_alcohol': AllChem.ReactionFromSmarts('[C;X3;H1:1]=[O:2]>>[CH2:1]-[OH:2]'),
+    'secondary_alcohol_to_ketone': AllChem.ReactionFromSmarts('[C;X4;H1;$([C](-[#6])-[#6]):1]-[O;H1:2]>>[C:1]=[O:2]'),
+    'ketone_to_secondary_alcohol': AllChem.ReactionFromSmarts('[C;X3;H0;$([C](-[#6])-[#6]):1]=[O:2]>>[CH:1]-[OH:2]'),
+    'aldehyde_to_alcohol': AllChem.ReactionFromSmarts('[C;X3;H1;$([C]-[#6]):1]=[O:2]>>[CH2:1]-[OH:2]'),
     'ester_to_aldehyde': AllChem.ReactionFromSmarts('[#6:3]-[C:1](=[O:2])-[O]-[#6]>>[#6:3]-[CH:1]=[O:2]'),
     'acid_to_aldehyde': AllChem.ReactionFromSmarts('[#6:3]-[C:1](=[O:2])-[O;H1]>>[#6:3]-[CH:1]=[O:2]'),
     'ester_to_alcohol': AllChem.ReactionFromSmarts('[#6:3]-[C:1](=[O:2])-[O]-[#6]>>[#6:3]-[CH2:1]-[OH:2]'),
@@ -47,6 +49,10 @@ RXN = {
 }
 PROPERTIES = ('MW', 'logP', 'TPSA', 'HBD', 'HBA', 'RotBonds', 'RingCount',
               'AromaticRings', 'FormalCharge', 'FractionCSP3')
+CONVERSIONS = ('alcohol_to_aldehyde', 'aldehyde_to_alcohol',
+               'secondary_alcohol_to_ketone', 'ketone_to_secondary_alcohol',
+               'ester_to_aldehyde', 'acid_to_aldehyde', 'ester_to_alcohol',
+               'acid_to_alcohol', 'nitrile_to_amine', 'imine_to_amine')
 STAGES = ('p1', 'p2_precursor', 'p3_precursor', 'p23', 'final', 'preferred')
 _SHARED = {}
 
@@ -103,7 +109,7 @@ def validate_config(c):
         extra = set(obj) - set(allowed)
         if extra:
             raise ValueError(f'Unknown {label} settings: {sorted(extra)}')
-    keys(c, ('inputs', 'output_dir', 'workers', 'routes', 'standardization', 'filters', 'diversity'), 'top-level')
+    keys(c, ('inputs', 'output_dir', 'workers', 'routes', 'standardization', 'filters', 'diversity', 'conversions'), 'top-level')
     keys(c.get('inputs', {}), ('directory', 'amines', 'alcohols', 'aldehydes', 'ketones', 'ester_carboxyl', 'halides'), 'inputs')
     if not c.get('inputs', {}).get('amines'):
         raise ValueError('inputs.amines must contain an SDF filename or glob pattern')
@@ -115,7 +121,8 @@ def validate_config(c):
         raise ValueError('workers must be a positive integer')
     keys(c.get('routes', {}), ('p1_amines', 'p1_alcohols', 'reductive_amination', 'sn2', 'direct_secondary_amines',
          'alcohol_to_aldehyde', 'aldehyde_to_alcohol', 'ester_to_aldehyde', 'acid_to_aldehyde',
-         'ester_to_alcohol', 'acid_to_alcohol', 'nitrile_to_amine', 'imine_to_amine'), 'routes')
+         'ester_to_alcohol', 'acid_to_alcohol', 'nitrile_to_amine', 'imine_to_amine',
+         'secondary_alcohol_to_ketone', 'ketone_to_secondary_alcohol'), 'routes')
     keys(c.get('standardization', {}), ('fragment_parent', 'uncharge'), 'standardization')
     for section in ('routes', 'standardization'):
         if not all(isinstance(v, bool) for v in c.get(section, {}).values()):
@@ -134,6 +141,10 @@ def validate_config(c):
         raise ValueError('final_max_similarity must be between 0 and 1, or null')
     if diversity.get('final_pick_count') and diversity.get('final_candidate_limit', 20000) < diversity['final_pick_count']:
         raise ValueError('final_candidate_limit must be at least final_pick_count')
+    keys(c.get('conversions', {}), ('max_steps', 'max_products_per_source'), 'conversions')
+    for key, value in c.get('conversions', {}).items():
+        if isinstance(value, bool) or not isinstance(value, int) or value < (0 if key == 'max_steps' else 1):
+            raise ValueError(f'conversions.{key} must be an integer within range')
     keys(c.get('filters', {}), STAGES, 'filters')
     for stage, spec in c.get('filters', {}).items():
         keys(spec, ('enabled', 'properties', 'required_smarts', 'excluded_smarts'), stage)
@@ -170,6 +181,15 @@ def reaction_products(name, *reactants):
                     if atom.HasProp('old_mapno') and atom.GetIntProp('old_mapno') in (1, 2, 3):
                         atom.SetNumExplicitHs(0)
                         atom.SetNoImplicit(False)
+            if name == 'secondary_alcohol_to_ketone':
+                for atom in p.GetAtoms():
+                    if atom.HasProp('old_mapno') and atom.GetIntProp('old_mapno') in (1, 2):
+                        atom.SetNumExplicitHs(0)
+                        atom.SetNoImplicit(False)
+            if name in ('secondary_alcohol_to_ketone', 'ketone_to_secondary_alcohol'):
+                for atom in p.GetAtoms():
+                    if atom.HasProp('old_mapno') and atom.GetIntProp('old_mapno') == 1:
+                        atom.SetChiralTag(Chem.ChiralType.CHI_UNSPECIFIED)
             Chem.SanitizeMol(p)
             smi = canonical(p)
         except (ValueError, RuntimeError):
@@ -230,17 +250,38 @@ def filtered(pool, c, stage):
     return {k: s for k, s in pool.items() if passes(s, c.get('filters', {}).get(stage, {}))}
 
 
-def converted_pool(source, required, conversions, routes):
+def expand_conversions(source, routes, settings):
+    """Bounded breadth-first conversion expansion before role classification.
+
+    A canonical structure is visited once per source, so reversible routes do
+    not loop. Keep one shortest conversion path for each source/structure.
+    """
+    enabled = [r for r in CONVERSIONS if routes.get(r, False)]
+    max_steps = settings.get('max_steps', 2)
+    max_products = settings.get('max_products_per_source', 100)
     result = {}
-    for key, smi in source.items():
-        m = molecule(smi)
-        if m.HasSubstructMatch(PAT[required]):
-            result[key] = smi
-        for conversion in conversions:
-            if routes.get(conversion, False):
-                for i, p in enumerate(reaction_products(conversion, m)):
-                    if molecule(p).HasSubstructMatch(PAT[required]):
-                        result[f'{key}|{conversion}:{i}'] = p
+    for source_key, smi in source.items():
+        smi = canonical(molecule(smi))
+        visited = {smi}
+        result[source_key] = smi
+        frontier = [(source_key, smi)]
+        for _ in range(max_steps):
+            following = []
+            for key, current in frontier:
+                for route in enabled:
+                    for i, product in enumerate(reaction_products(route, molecule(current))):
+                        if product in visited:
+                            continue
+                        if len(visited) - 1 >= max_products:
+                            raise ValueError(f'Conversion limit exceeded for {source_key}; '
+                                             'reduce enabled routes/max_steps or increase max_products_per_source')
+                        visited.add(product)
+                        name = f'{key}|{route}:{i}'
+                        result[name] = product
+                        following.append((name, product))
+            frontier = following
+            if not frontier:
+                break
     return result
 
 
@@ -377,26 +418,23 @@ def run(c, base):
     pools, stats = load_inputs(c, base)
     routes = c.get('routes', {})
     workers = c.get('workers', 1)
-    source = {**pools['alcohols'], **pools['aldehydes'], **pools['ester_carboxyl']}
-    aldehydes = converted_pool(source, 'aldehyde',
-                              ('alcohol_to_aldehyde', 'ester_to_aldehyde', 'acid_to_aldehyde'), routes)
-    alcohols = converted_pool(source, 'alcohol',
-                             ('aldehyde_to_alcohol', 'ester_to_alcohol', 'acid_to_alcohol'), routes)
-    carbonyls = dict(aldehydes)
-    carbonyls.update({k: s for k, s in pools['ketones'].items() if molecule(s).HasSubstructMatch(PAT['ketone'])})
-    carbonyls = filtered(carbonyls, c, 'p3_precursor')
-    alcohols = filtered(alcohols, c, 'p1') if routes.get('p1_alcohols', True) else {}
-    halides = filtered({k: s for k, s in pools['halides'].items()
-                        if molecule(s).HasSubstructMatch(PAT['halide'])}, c, 'p3_precursor')
+    # Pool labels locate files; actual functional groups determine destinations.
+    source = {k: s for pool in pools.values() for k, s in pool.items()}
+    variants = expand_conversions(source, routes, c.get('conversions', {}))
+    stats['conversion_source_entries'] = len(source)
+    stats['conversion_variants_including_sources'] = len(variants)
+    with (out / 'conversion_provenance.csv').open('w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(['source_and_conversion_path', 'smiles'])
+        w.writerows(variants.items())
+    carbonyls = filtered({k: s for k, s in variants.items()
+                         if molecule(s).HasSubstructMatch(PAT['aldehyde']) or molecule(s).HasSubstructMatch(PAT['ketone'])}, c, 'p3_precursor')
+    alcohols = filtered({k: s for k, s in variants.items() if molecule(s).HasSubstructMatch(PAT['alcohol'])}, c, 'p1') if routes.get('p1_alcohols', True) else {}
+    halides = filtered({k: s for k, s in variants.items() if molecule(s).HasSubstructMatch(PAT['halide'])}, c, 'p3_precursor')
     carbonyls = reduce_pool(carbonyls, 'p3_carbonyls', c, out)
     halides = reduce_pool(halides, 'p3_halides', c, out)
     alcohols = reduce_pool(alcohols, 'p1_alcohols', c, out)
-    amines = dict(pools['amines'])
-    for conversion in ('nitrile_to_amine', 'imine_to_amine'):
-        if routes.get(conversion, False):
-            for k, s in pools['amines'].items():
-                for i, p in enumerate(reaction_products(conversion, molecule(s))):
-                    amines[f'{k}|{conversion}:{i}'] = p
+    amines = variants
     primary = filtered({k: s for k, s in amines.items() if molecule(s).HasSubstructMatch(PAT['primary'])}, c, 'p2_precursor')
     secondary = {k: s for k, s in amines.items() if molecule(s).HasSubstructMatch(PAT['secondary'])}
     p1 = filtered(secondary, c, 'p1') if routes.get('p1_amines', True) else {}
