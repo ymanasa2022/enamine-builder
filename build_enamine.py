@@ -1,560 +1,616 @@
-#!/usr/bin/env python3
-"""Enumerate triazine nitriles using editable JSON settings. See README.md."""
-import argparse
-import csv
-import glob
-import hashlib
-import heapq
-import json
-import math
-import sqlite3
-from functools import lru_cache
-from multiprocessing import Pool
-from pathlib import Path
+"""
+build_enamine.py  —  Combinatorial triazine library builder (optimised)
+
+Scaffold:  2-CN-4,6-dichloro-1,3,5-triazine   N#CC1=NC(Cl)=NC(Cl)=N1
+           P1  = variable (secondary amine OR alcohol) via SNAr at first Cl
+           P2/P3 = secondary amine arm  (R'–CH₂–NH–CH₂–R)  via SNAr at second Cl
+
+Building-block pools (from ENAMINE SDF files):
+  --alcohols        → alcohols / OH sources
+  --aldehydes       → aldehyde sources  (required)
+  --amines          → primary + secondary amines  (required)
+  --ester_carboxyl  → combined ester+carboxyl file (optional)
+  --halides         → alkyl halides for SN2 (optional)
+
+Speed notes
+  - All SMARTS reactions pre-compiled at module level (not per-call)
+  - Molecules parsed once per pool into (key, mol) pairs
+  - Cross-product loops parallelised with multiprocessing (--workers N)
+"""
 
 from rdkit import Chem
-from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors, rdFingerprintGenerator
-from rdkit.SimDivFilters.rdSimDivPickers import MaxMinPicker
-from rdkit.Chem.MolStandardize import rdMolStandardize
+from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors
+import argparse
+import pandas as pd
+import os
+import datetime
+import glob as _glob
+from multiprocessing import Pool, cpu_count
 
-CORE = 'N#CC1=NC(Cl)=NC(Cl)=N1'
-# Exclude amide/sulfonamide/phosphoramide nitrogens and N-heteroatom bonds.
-PRIMARY = '[N;X3;H2;+0;!$(N-[C,S,P]=[O,S,N]);!$(N-[N,O,S])]'
-SECONDARY = '[N;X3;H1;+0;!$(N-[C,S,P]=[O,S,N]);!$(N-[N,O,S])]'
-ALCOHOL = '[O;X2;H1;+0]-[C;X4]'
-CARBONYL = '[C;X3;H1,H0](=[O;X1])(-[#6])'
-PAT = {k: Chem.MolFromSmarts(v) for k, v in {
-    'primary': PRIMARY, 'secondary': SECONDARY, 'alcohol': ALCOHOL,
-    'aldehyde': '[C;X3;H1](=[O;X1])-[#6]',
-    'ketone': '[#6]-[C;X3;H0](=[O;X1])-[#6]',
-    'halide': '[C;X4;H2,H3]-[Cl,Br,I]',
-}.items()}
-# Enumerate all valid sites; canonicalization removes symmetry duplicates.
-TRIAZINE = '[c:1]1([Cl])[n:4][c:5][n:6][c:7][n:8]1'
-RXN = {
-    'snar_n': AllChem.ReactionFromSmarts(TRIAZINE + '.' + SECONDARY[:-1] + ':3]>>[c:1]1([N:3])[n:4][c:5][n:6][c:7][n:8]1'),
-    'snar_o': AllChem.ReactionFromSmarts(TRIAZINE + '.[O;X2;H1:3]-[C;X4:2]>>[c:1]1([O:3][C:2])[n:4][c:5][n:6][c:7][n:8]1'),
-    'reductive_am': AllChem.ReactionFromSmarts(PRIMARY[:-1] + ':1].[C;X3;H1,H0;!$(C-[N,O,S]);$([C]-[#6]):2]=[O]>>[N:1]-[C:2]'),
-    'sn2': AllChem.ReactionFromSmarts(PRIMARY[:-1] + ':1].[C;X4;H2,H3:2]-[Cl,Br,I]>>[N:1]-[C:2]'),
-    'alcohol_to_aldehyde': AllChem.ReactionFromSmarts('[C;X4;H2:1]-[O;H1:2]>>[CH:1]=[O:2]'),
-    'secondary_alcohol_to_ketone': AllChem.ReactionFromSmarts('[C;X4;H1;$([C](-[#6])-[#6]):1]-[O;H1:2]>>[C:1]=[O:2]'),
-    'ketone_to_secondary_alcohol': AllChem.ReactionFromSmarts('[C;X3;H0;$([C](-[#6])-[#6]):1]=[O:2]>>[CH:1]-[OH:2]'),
-    'aldehyde_to_alcohol': AllChem.ReactionFromSmarts('[C;X3;H1;$([C]-[#6]):1]=[O:2]>>[CH2:1]-[OH:2]'),
-    'ester_to_aldehyde': AllChem.ReactionFromSmarts('[#6:3]-[C:1](=[O:2])-[O]-[#6]>>[#6:3]-[CH:1]=[O:2]'),
-    'acid_to_aldehyde': AllChem.ReactionFromSmarts('[#6:3]-[C:1](=[O:2])-[O;H1]>>[#6:3]-[CH:1]=[O:2]'),
-    'ester_to_alcohol': AllChem.ReactionFromSmarts('[#6:3]-[C:1](=[O:2])-[O]-[#6]>>[#6:3]-[CH2:1]-[OH:2]'),
-    'acid_to_alcohol': AllChem.ReactionFromSmarts('[#6:3]-[C:1](=[O:2])-[O;H1]>>[#6:3]-[CH2:1]-[OH:2]'),
-    'nitrile_to_amine': AllChem.ReactionFromSmarts('[C:1]#[N:2]>>[CH2:1]-[NH2:2]'),
-    'imine_to_amine': AllChem.ReactionFromSmarts('[C:1]=[N;H1:2]>>[C:1]-[NH2:2]'),
-}
-PROPERTIES = ('MW', 'logP', 'TPSA', 'HBD', 'HBA', 'RotBonds', 'RingCount',
-              'AromaticRings', 'FormalCharge', 'FractionCSP3')
-CONVERSIONS = ('alcohol_to_aldehyde', 'aldehyde_to_alcohol',
-               'secondary_alcohol_to_ketone', 'ketone_to_secondary_alcohol',
-               'ester_to_aldehyde', 'acid_to_aldehyde', 'ester_to_alcohol',
-               'acid_to_alcohol', 'nitrile_to_amine', 'imine_to_amine')
-STAGES = ('p1', 'p2_precursor', 'p3_precursor', 'p23', 'final', 'preferred')
-_SHARED = {}
+now = datetime.datetime.now()
 
 
-def molecule(smiles):
-    return Chem.MolFromSmiles(smiles)
+# ── Pre-compiled reactions (module level — pay the cost once) ─────────────────
+
+_RXN_ESTER_TO_ALD    = AllChem.ReactionFromSmarts('[C:1](=[O])[O][C]>>[C:1]O')
+_RXN_CARBOXYL_TO_ALD = AllChem.ReactionFromSmarts('[C:0][C:1](=[O])[OH]>>[C:0][CH:1]=O')
+_RXN_OH_TO_ALD       = AllChem.ReactionFromSmarts('[C:0][CH2:1][OH:2]>>[C:0][CH:1]=[O:2]')
+_RXN_ALD_TO_OH       = AllChem.ReactionFromSmarts('[C:0][CH:1]=[O:2]>>[C:0][CH2:1][OH:2]')
+_RXN_ESTER_TO_OH     = AllChem.ReactionFromSmarts('[C:0][C:1](=[O])[O][C]>>[C:0][CH2:1][OH]')
+_RXN_CARBOXYL_TO_OH  = AllChem.ReactionFromSmarts('[C:0][C:1](=[O])[OH]>>[C:0][CH2:1][OH]')
+_RXN_NITRILE_TO_NH2  = AllChem.ReactionFromSmarts('[C:1]#[N:2]>>[C:1][NH2:2]')
+_RXN_IMINE_TO_NH2    = AllChem.ReactionFromSmarts('[C:1]=[NH:2]>>[C:1][NH2:2]')
+_RXN_REDUCTIVE_AM    = AllChem.ReactionFromSmarts('[NH2:1].[CH:2]=[O]>>[NH:1][CH2:2]')
+_RXN_SN2             = AllChem.ReactionFromSmarts('[NH2:1].[C:2][Cl,Br,I]>>[NH:1][C:2]')
+_RXN_SNAR_N          = AllChem.ReactionFromSmarts('[c:1][Cl].[NH:3]>>[c:1][N:3]')
+_RXN_SNAR_O          = AllChem.ReactionFromSmarts('[c:1][Cl].[C:2][OH]>>[c:1][O][C:2]')
+
+_PAT_CL_AROM    = Chem.MolFromSmarts('[c][Cl]')
+_PAT_PRIMARY_OH = Chem.MolFromSmarts('[C][CH2][OH]')
+_PAT_PRIM_AMINE = Chem.MolFromSmarts('[C][NH2]')
+_PAT_SEC_AMINE  = Chem.MolFromSmarts('[C][NH][C]')
+_PAT_NITRILE    = Chem.MolFromSmarts('[C]#[N]')
+_PAT_IMINE      = Chem.MolFromSmarts('[C]=[NH]')
+_PAT_HALIDE     = Chem.MolFromSmarts('[C][F,Cl,Br,I]')
+
+CORE_DICHLORO = 'N#CC1=NC(Cl)=NC(Cl)=N1'
 
 
-def canonical(mol):
-    return Chem.MolToSmiles(mol, isomericSmiles=True)
+# ── SDF loader ───────────────────────────────────────────────────────────────
+
+def _mol_id(mol, idx):
+    for prop in ('CatalogID', 'ID', 'Code'):
+        if mol.HasProp(prop):
+            v = mol.GetProp(prop).strip()
+            if v:
+                return v
+    name = mol.GetProp('_Name').strip() if mol.HasProp('_Name') else ''
+    return name if name else f'mol_{idx}'
 
 
-@lru_cache(maxsize=20000)
-def properties(smiles):
-    m = molecule(smiles)
+def load_sdf(path):
+    suppl = Chem.SDMolSupplier(path, sanitize=True, removeHs=True)
+    records = []
+    for i, mol in enumerate(suppl):
+        if mol is None:
+            continue
+        records.append({'synonyms': _mol_id(mol, i), 'smiles': Chem.MolToSmiles(mol)})
+    return pd.DataFrame(records)
+
+
+def load_block(enamine_dir, prefix, label):
+    paths = sorted(_glob.glob(os.path.join(enamine_dir, f'{prefix}*.sdf')))
+    if not paths:
+        raise FileNotFoundError(f"No SDF files for {label} (prefix '{prefix}' in {enamine_dir})")
+    frames = []
+    for p in paths:
+        df = load_sdf(p)
+        print(f"  {os.path.basename(p):35s}  {len(df):>7,} molecules")
+        frames.append(df)
+    combined = pd.concat(frames, ignore_index=True)
+    print(f"  → {label} total: {len(combined):,}")
+    return combined
+
+
+def _load_optional(enamine_dir, prefix, label):
+    if not prefix:
+        print(f"  [skip] {label} — not provided")
+        return pd.DataFrame(columns=['synonyms', 'smiles'])
+    try:
+        return load_block(enamine_dir, prefix, label)
+    except FileNotFoundError as e:
+        print(f"  [warn] {e}")
+        return pd.DataFrame(columns=['synonyms', 'smiles'])
+
+
+# ── Property helpers ─────────────────────────────────────────────────────────
+
+def compute_props(smi, name=''):
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return None
     return {
-        'MW': Descriptors.MolWt(m), 'logP': Descriptors.MolLogP(m),
-        'TPSA': rdMolDescriptors.CalcTPSA(m),
-        'HBD': rdMolDescriptors.CalcNumHBD(m), 'HBA': rdMolDescriptors.CalcNumHBA(m),
-        'RotBonds': rdMolDescriptors.CalcNumRotatableBonds(m),
-        'RingCount': rdMolDescriptors.CalcNumRings(m),
-        'AromaticRings': rdMolDescriptors.CalcNumAromaticRings(m),
-        'FormalCharge': Chem.GetFormalCharge(m),
-        'FractionCSP3': rdMolDescriptors.CalcFractionCSP3(m),
+        'name':      name,
+        'smiles':    smi,
+        'MW':        round(Descriptors.MolWt(mol), 2),
+        'logP':      round(Descriptors.MolLogP(mol), 2),
+        'HBD':       Descriptors.NumHDonors(mol),
+        'HBA':       Descriptors.NumHAcceptors(mol),
+        'RotBonds':  rdMolDescriptors.CalcNumRotatableBonds(mol),
+        'TPSA':      round(rdMolDescriptors.CalcTPSA(mol), 1),
+        'RingCount': mol.GetRingInfo().NumRings(),
     }
 
 
-@lru_cache(maxsize=512)
-def query(smarts):
-    return Chem.MolFromSmarts(smarts)
+def log_pool(pool_dict, label, out_dir):
+    records = [compute_props(smi, name) for name, smi in pool_dict.items() if smi]
+    records = [r for r in records if r]
+    if not records:
+        print(f"  [warn] {label}: nothing to log")
+        return
+    df = pd.DataFrame(records)
+    path = os.path.join(out_dir, f'props_{label}.csv')
+    df.to_csv(path, index=False)
+    print(f"  {label}: {len(df):,} entries → {path}")
+    print(f"    MW {df['MW'].min():.0f}–{df['MW'].max():.0f}  "
+          f"logP {df['logP'].min():.1f}–{df['logP'].max():.1f}  "
+          f"HBD {df['HBD'].min()}–{df['HBD'].max()}  "
+          f"RotBonds {df['RotBonds'].min()}–{df['RotBonds'].max()}")
 
 
-def passes(smiles, spec):
-    if not spec.get('enabled', True):
-        return True
-    p = properties(smiles)
-    for key, limits in spec.get('properties', {}).items():
-        if limits is None:
-            continue
-        lo, hi = limits.get('min'), limits.get('max')
-        if lo is not None and p[key] < lo:
-            return False
-        if hi is not None and p[key] > hi:
-            return False
-    m = molecule(smiles)
-    return (all(m.HasSubstructMatch(query(s)) for s in spec.get('required_smarts', []))
-            and not any(m.HasSubstructMatch(query(s)) for s in spec.get('excluded_smarts', [])))
+# ── Block-level filters ──────────────────────────────────────────────────────
+
+def filter_p3_block(smi):
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return False
+    mw  = Descriptors.MolWt(mol)
+    rot = rdMolDescriptors.CalcNumRotatableBonds(mol)
+    rng = mol.GetRingInfo().NumRings()
+    return (mw > 100 or rng >= 1) and mw <= 200 and rot <= 3
 
 
-def validate_config(c):
-    def keys(obj, allowed, label):
-        if not isinstance(obj, dict):
-            raise ValueError(f'{label} must be an object')
-        extra = set(obj) - set(allowed)
-        if extra:
-            raise ValueError(f'Unknown {label} settings: {sorted(extra)}')
-    keys(c, ('inputs', 'output_dir', 'workers', 'routes', 'standardization', 'filters', 'diversity', 'conversions'), 'top-level')
-    keys(c.get('inputs', {}), ('directory', 'amines', 'alcohols', 'aldehydes', 'ketones', 'ester_carboxyl', 'halides'), 'inputs')
-    if not c.get('inputs', {}).get('amines'):
-        raise ValueError('inputs.amines must contain an SDF filename or glob pattern')
-    for k, v in c['inputs'].items():
-        if k != 'directory' and not (v is None or isinstance(v, str) or
-                                      isinstance(v, list) and all(isinstance(x, str) for x in v)):
-            raise ValueError(f'inputs.{k} must be a string, array of strings, or null')
-    if not isinstance(c.get('workers', 1), int) or isinstance(c.get('workers'), bool) or c.get('workers', 1) < 1:
-        raise ValueError('workers must be a positive integer')
-    keys(c.get('routes', {}), ('p1_amines', 'p1_alcohols', 'reductive_amination', 'sn2', 'direct_secondary_amines',
-         'alcohol_to_aldehyde', 'aldehyde_to_alcohol', 'ester_to_aldehyde', 'acid_to_aldehyde',
-         'ester_to_alcohol', 'acid_to_alcohol', 'nitrile_to_amine', 'imine_to_amine',
-         'secondary_alcohol_to_ketone', 'ketone_to_secondary_alcohol'), 'routes')
-    keys(c.get('standardization', {}), ('fragment_parent', 'uncharge'), 'standardization')
-    for section in ('routes', 'standardization'):
-        if not all(isinstance(v, bool) for v in c.get(section, {}).values()):
-            raise ValueError(f'{section} values must be true or false')
-    diversity = c.get('diversity', {})
-    keys(diversity, ('seed', 'pool_limits', 'final_pick_count', 'final_candidate_limit', 'final_max_similarity'), 'diversity')
-    keys(diversity.get('pool_limits', {}), ('p1_amines', 'p1_alcohols', 'p2_precursors', 'p3_carbonyls', 'p3_halides', 'p23_arms'), 'diversity.pool_limits')
-    for key, value in {**diversity.get('pool_limits', {}), **{k: v for k, v in diversity.items() if k not in ('pool_limits', 'final_max_similarity')}}.items():
-        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < (0 if key == 'seed' else 1)):
-            raise ValueError(f'diversity.{key} must be a positive integer or null (seed may be zero)')
-    for key in ('seed', 'final_candidate_limit'):
-        if key in diversity and diversity[key] is None:
-            raise ValueError(f'diversity.{key} cannot be null')
-    similarity = diversity.get('final_max_similarity')
-    if similarity is not None and (isinstance(similarity, bool) or not isinstance(similarity, (int, float)) or not 0 <= similarity <= 1):
-        raise ValueError('final_max_similarity must be between 0 and 1, or null')
-    if diversity.get('final_pick_count') and diversity.get('final_candidate_limit', 20000) < diversity['final_pick_count']:
-        raise ValueError('final_candidate_limit must be at least final_pick_count')
-    keys(c.get('conversions', {}), ('max_steps', 'max_products_per_source'), 'conversions')
-    for key, value in c.get('conversions', {}).items():
-        if isinstance(value, bool) or not isinstance(value, int) or value < (0 if key == 'max_steps' else 1):
-            raise ValueError(f'conversions.{key} must be an integer within range')
-    keys(c.get('filters', {}), STAGES, 'filters')
-    for stage, spec in c.get('filters', {}).items():
-        keys(spec, ('enabled', 'properties', 'required_smarts', 'excluded_smarts'), stage)
-        if not isinstance(spec.get('enabled', True), bool):
-            raise ValueError(f'{stage}.enabled must be true or false')
-        keys(spec.get('properties', {}), PROPERTIES, stage + '.properties')
-        for k, lim in spec.get('properties', {}).items():
-            if lim is None:
-                continue
-            keys(lim, ('min', 'max'), stage + '.' + k)
-            for value in lim.values():
-                if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)):
-                    raise ValueError(f'{stage}.{k}: bounds must be finite numbers or null')
-            if lim.get('min') is not None and lim.get('max') is not None and lim['min'] > lim['max']:
-                raise ValueError(f'{stage}.{k}: min exceeds max')
-        for field in ('required_smarts', 'excluded_smarts'):
-            patterns = spec.get(field, [])
-            if not isinstance(patterns, list) or not all(isinstance(s, str) for s in patterns):
-                raise ValueError(f'{stage}.{field} must be an array of SMARTS strings')
-            for s in patterns:
-                if query(s) is None:
-                    raise ValueError(f'Invalid SMARTS in {stage}: {s}')
+def filter_p2_block(smi):
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return False
+    mw  = Descriptors.MolWt(mol)
+    hbd = Descriptors.NumHDonors(mol)
+    hba = Descriptors.NumHAcceptors(mol)
+    rot = rdMolDescriptors.CalcNumRotatableBonds(mol)
+    return (hbd + hba) >= 1 and mw <= 200 and rot <= 3
 
 
-def reaction_products(name, *reactants):
-    seen = set()
-    for products in RXN[name].RunReactants(tuple(reactants)):
-        p = products[0]
-        try:
-            # Explicit H counts in reaction templates are unreliable after a
-            # change in bond order/degree. Recompute Hs on mapped amine/carbonyl.
-            if name in ('reductive_am', 'sn2', 'snar_n', 'imine_to_amine'):
-                for atom in p.GetAtoms():
-                    if atom.HasProp('old_mapno') and atom.GetIntProp('old_mapno') in (1, 2, 3):
-                        atom.SetNumExplicitHs(0)
-                        atom.SetNoImplicit(False)
-            if name == 'secondary_alcohol_to_ketone':
-                for atom in p.GetAtoms():
-                    if atom.HasProp('old_mapno') and atom.GetIntProp('old_mapno') in (1, 2):
-                        atom.SetNumExplicitHs(0)
-                        atom.SetNoImplicit(False)
-            if name in ('secondary_alcohol_to_ketone', 'ketone_to_secondary_alcohol'):
-                for atom in p.GetAtoms():
-                    if atom.HasProp('old_mapno') and atom.GetIntProp('old_mapno') == 1:
-                        atom.SetChiralTag(Chem.ChiralType.CHI_UNSPECIFIED)
-            Chem.SanitizeMol(p)
-            smi = canonical(p)
-        except (ValueError, RuntimeError):
-            continue
-        if smi not in seen:
-            seen.add(smi)
-            yield smi
+def filter_p1_block(smi):
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return False
+    mw  = Descriptors.MolWt(mol)
+    rot = rdMolDescriptors.CalcNumRotatableBonds(mol)
+    return mw <= 150 and rot <= 3
 
 
-def normalize(m, settings):
-    if settings.get('fragment_parent', True):
-        m = rdMolStandardize.FragmentParent(m)
-    if settings.get('uncharge', True):
-        m = rdMolStandardize.Uncharger().uncharge(m)
-    return m
-
-
-def load_inputs(c, base):
-    root = Path(c['inputs'].get('directory', '.'))
-    if not root.is_absolute():
-        root = base / root
-    pools = {}
-    stats = {}
-    for label in ('amines', 'alcohols', 'aldehydes', 'ketones', 'ester_carboxyl', 'halides'):
-        patterns = c['inputs'].get(label) or []
-        if isinstance(patterns, str):
-            patterns = [patterns]
-        paths = set()
-        for pattern in patterns:
-            matches = glob.glob(str(root / pattern))
-            if not matches:
-                raise FileNotFoundError(f'No files matched inputs.{label}: {root / pattern}')
-            paths.update(matches)
-        entries = {}
-        read = invalid = 0
-        for path in sorted(paths):
-            for i, m in enumerate(Chem.SDMolSupplier(path, sanitize=True, removeHs=True)):
-                read += 1
-                if m is None:
-                    invalid += 1
-                    continue
-                identifier = next((m.GetProp(k).strip() for k in ('CatalogID', 'ID', 'Code', '_Name')
-                                   if m.HasProp(k) and m.GetProp(k).strip()), f'mol_{i}')
-                try:
-                    smi = canonical(normalize(m, c.get('standardization', {})))
-                except (ValueError, RuntimeError):
-                    invalid += 1
-                    continue
-                key = f'{Path(path).name}:{identifier}:{i}'
-                entries[key] = smi
-        pools[label] = entries
-        stats[label] = {'records': read, 'invalid': invalid, 'valid': len(entries)}
-        print(f'{label}: {len(entries):,} valid entries ({invalid:,} invalid)', flush=True)
-    return pools, stats
-
-
-def filtered(pool, c, stage):
-    return {k: s for k, s in pool.items() if passes(s, c.get('filters', {}).get(stage, {}))}
-
-
-def expand_conversions(source, routes, settings):
-    """Bounded breadth-first conversion expansion before role classification.
-
-    A canonical structure is visited once per source, so reversible routes do
-    not loop. Keep one shortest conversion path for each source/structure.
+def filter_post_p23(smi):
+    """Post-synthesis filter on assembled P2/P3 secondary amines.
+    Keeps products that are small enough to leave room for the triazine
+    scaffold (~150 Da) and P1 block (~100 Da) in the final molecule.
+    Target final MW budget: ~500 Da → P2/P3 arm ≤ 300 Da.
     """
-    enabled = [r for r in CONVERSIONS if routes.get(r, False)]
-    max_steps = settings.get('max_steps', 2)
-    max_products = settings.get('max_products_per_source', 100)
-    result = {}
-    for source_key, smi in source.items():
-        smi = canonical(molecule(smi))
-        visited = {smi}
-        result[source_key] = smi
-        frontier = [(source_key, smi)]
-        for _ in range(max_steps):
-            following = []
-            for key, current in frontier:
-                for route in enabled:
-                    for i, product in enumerate(reaction_products(route, molecule(current))):
-                        if product in visited:
-                            continue
-                        if len(visited) - 1 >= max_products:
-                            raise ValueError(f'Conversion limit exceeded for {source_key}; '
-                                             'reduce enabled routes/max_steps or increase max_products_per_source')
-                        visited.add(product)
-                        name = f'{key}|{route}:{i}'
-                        result[name] = product
-                        following.append((name, product))
-            frontier = following
-            if not frontier:
-                break
-    return result
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return False
+    mw  = Descriptors.MolWt(mol)
+    rot = rdMolDescriptors.CalcNumRotatableBonds(mol)
+    return mw <= 300 and rot <= 5
 
 
-def init_worker(shared):
-    global _SHARED
-    _SHARED = shared
+def print_filter_summary(label, before, after):
+    pct = 100 * after / before if before > 0 else 0
+    print(f"  {label}: {before:,} → {after:,} ({pct:.1f}% kept)")
 
 
-def arm_worker(item):
-    key, smi = item
-    out = []
-    for route, pool in _SHARED['partners']:
-        for other_key, other_smi in pool:
-            for i, p in enumerate(reaction_products(route, molecule(smi), molecule(other_smi))):
-                if molecule(p).HasSubstructMatch(PAT['secondary']) and passes(p, _SHARED['p23_filter']):
-                    out.append((f'{route}|{key}|{other_key}|site{i}', p))
-    return out
+# ── Mol-level conversions (accept mol object, return SMILES or None) ──────────
+
+def _apply_rxn(rxn, mol):
+    """Run a single-reactant reaction; return first valid product SMILES or None."""
+    try:
+        prods = rxn.RunReactants((mol,))
+        if prods:
+            p = Chem.MolFromSmiles(Chem.MolToSmiles(prods[0][0]))
+            if p:
+                return Chem.MolToSmiles(p)
+    except Exception:
+        pass
+    return None
 
 
-def assembly_worker(task):
-    p1_name, p1_smi, kind = task
-    route = 'snar_n' if kind == 'amine' else 'snar_o'
-    out = []
-    for mono in reaction_products(route, molecule(CORE), molecule(p1_smi)):
-        for p23_name, p23_smi in _SHARED['p23_items']:
-            for i, full in enumerate(reaction_products('snar_n', molecule(mono), molecule(p23_smi))):
-                # Ensure two substitutions on the nitrile-triazine core.
-                if molecule(full).HasSubstructMatch(query('n1c(Cl)nc(C#N)nc1')):
-                    continue
-                if not passes(full, _SHARED['final_filter']):
-                    continue
-                row = {'synonyms': f'{p1_name}::{p23_name}::site{i}',
-                       'p1_name': p1_name, 'p1_smiles': p1_smi, 'p1_type': kind,
-                       'p23_name': p23_name, 'p23_smiles': p23_smi, 'smiles': full,
-                       'preferred': passes(full, _SHARED['preferred_filter'])}
-                row.update(properties(full))
-                out.append(row)
-    return out
+def get_aldehyde(mol):
+    # Already an aldehyde? (–CHO)
+    if mol.HasSubstructMatch(Chem.MolFromSmarts('[CH]=O')):
+        return Chem.MolToSmiles(mol)
+    # Ester → intermediate OH, then oxidise
+    oh_smi = _apply_rxn(_RXN_ESTER_TO_ALD, mol)
+    if oh_smi:
+        oh_mol = Chem.MolFromSmiles(oh_smi)
+        result = _apply_rxn(_RXN_OH_TO_ALD, oh_mol) if oh_mol else None
+        if result:
+            return result
+    # Carboxyl → aldehyde directly
+    result = _apply_rxn(_RXN_CARBOXYL_TO_ALD, mol)
+    if result:
+        return result
+    # Primary alcohol → aldehyde
+    return _apply_rxn(_RXN_OH_TO_ALD, mol)
 
 
-def batches(worker, tasks, shared, workers):
-    if workers == 1:
-        init_worker(shared)
-        for task in tasks:
-            yield worker(task)
-    else:
-        with Pool(workers, initializer=init_worker, initargs=(shared,)) as pool:
-            yield from pool.imap(worker, tasks, chunksize=1)
+def get_alcohol(mol):
+    if mol.HasSubstructMatch(_PAT_PRIMARY_OH):
+        return Chem.MolToSmiles(mol)
+    result = _apply_rxn(_RXN_ALD_TO_OH, mol)
+    if result:
+        return result
+    result = _apply_rxn(_RXN_ESTER_TO_OH, mol)
+    if result:
+        return result
+    return _apply_rxn(_RXN_CARBOXYL_TO_OH, mol)
 
 
-def write_pool(pool, label, out):
-    with (out / f'props_{label}.csv').open('w', newline='') as f:
-        w = csv.DictWriter(f, fieldnames=['name', 'smiles', *PROPERTIES])
-        w.writeheader()
-        for name, smi in pool.items():
-            w.writerow({'name': name, 'smiles': smi, **properties(smi)})
+def classify_and_process_amine(smi):
+    """Return (processed_smiles, 'primary'|'secondary'|'other')."""
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return None, 'invalid'
+    # Convert nitrile / imine precursors to primary amine
+    if mol.HasSubstructMatch(_PAT_NITRILE):
+        new_smi = _apply_rxn(_RXN_NITRILE_TO_NH2, mol)
+        if new_smi:
+            mol = Chem.MolFromSmiles(new_smi)
+    if mol.HasSubstructMatch(_PAT_IMINE):
+        new_smi = _apply_rxn(_RXN_IMINE_TO_NH2, mol)
+        if new_smi:
+            mol = Chem.MolFromSmiles(new_smi)
+    out = Chem.MolToSmiles(mol)
+    if mol.HasSubstructMatch(_PAT_PRIM_AMINE):
+        return out, 'primary'
+    if mol.HasSubstructMatch(_PAT_SEC_AMINE):
+        return out, 'secondary'
+    return out, 'other'
 
 
+# ── Parallel worker functions (must be top-level for pickling) ────────────────
+#
+# Design: shared lists (aldehydes, halides, p23 amines) are sent to each worker
+# process ONCE via the pool initializer, stored in _G_SHARED.  Individual tasks
+# are just (key, smiles) pairs — tiny — so IPC overhead is minimal even for
+# millions of cross-product pairs.
 
-def diverse_indices(smiles, count, seed, max_similarity=None):
-    """Greedy MaxMin using Morgan radius-2 fingerprints; retain supplied stereo."""
-    if not smiles:
+_G_SHARED: dict = {}
+
+
+def _init_worker(shared: dict):
+    """Pool initializer: load shared data into the worker-process global."""
+    global _G_SHARED
+    _G_SHARED = shared
+
+
+def _worker_reductive_am(amine_kv):
+    """One primary amine × all aldehydes → [(name, smiles), …]"""
+    amine_key, amine_smi = amine_kv
+    amine = Chem.MolFromSmiles(amine_smi)
+    if amine is None:
         return []
-    if count is None:
-        count = len(smiles)
-    count = min(count, len(smiles))
-    if count == len(smiles) and max_similarity is None:
-        return list(range(len(smiles)))
-    generator = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048, includeChirality=True)
-    fps = [generator.GetFingerprint(molecule(s)) for s in smiles]
-    if max_similarity is not None:
-        picks, _ = MaxMinPicker().LazyBitVectorPickWithThreshold(fps, len(fps), count, 1 - max_similarity, seed=seed)
-        return list(picks)
-    return list(MaxMinPicker().LazyBitVectorPick(fps, len(fps), count, seed=seed))
+    out = []
+    for ald_key, ald_smi in _G_SHARED['ald_items']:
+        ald = Chem.MolFromSmiles(ald_smi)
+        if ald is None:
+            continue
+        try:
+            prods = _RXN_REDUCTIVE_AM.RunReactants((amine, ald))
+            if prods:
+                mol = Chem.MolFromSmiles(Chem.MolToSmiles(prods[0][0]))
+                if mol:
+                    out.append((f'{amine_key}_{ald_key}', Chem.MolToSmiles(mol)))
+        except Exception:
+            pass
+    return out
 
 
-def reduce_pool(pool, label, c, out):
-    # Normalize before this point, then deduplicate exact isomeric SMILES.
-    unique = {}
-    with (out / f'aliases_{label}.csv').open('w', newline='') as f:
-        w = csv.writer(f)
-        w.writerow(['representative_name', 'source_name', 'smiles'])
-        for name, smi in pool.items():
-            smi = canonical(molecule(smi))
-            representative = unique.setdefault(smi, name)
-            w.writerow([representative, name, smi])
-    entries = [(name, smi) for smi, name in sorted(unique.items())]
-    div = c.get('diversity', {})
-    count = div.get('pool_limits', {}).get(label)
-    indices = diverse_indices([s for _, s in entries], count, div.get('seed', 42))
-    kept = dict(entries[i] for i in indices)
-    print(f'{label}: {len(pool):,} routes -> {len(unique):,} unique -> {len(kept):,} selected', flush=True)
-    return kept
+def _worker_sn2(amine_kv):
+    """One primary amine × all halides → [(name, smiles), …]"""
+    amine_key, amine_smi = amine_kv
+    amine = Chem.MolFromSmiles(amine_smi)
+    if amine is None:
+        return []
+    out = []
+    for hal_key, hal_smi in _G_SHARED['hal_items']:
+        hal = Chem.MolFromSmiles(hal_smi)
+        if hal is None:
+            continue
+        try:
+            prods = _RXN_SN2.RunReactants((amine, hal))
+            if prods:
+                mol = Chem.MolFromSmiles(Chem.MolToSmiles(prods[0][0]))
+                if mol:
+                    out.append((f'{amine_key}_{hal_key}', Chem.MolToSmiles(mol)))
+        except Exception:
+            pass
+    return out
 
 
-def select_final(db, c, out):
-    div = c.get('diversity', {})
-    count = div.get('final_pick_count')
-    if count is None:
-        return 0
-    # Uniform deterministic sample of UNIQUE products using a stable hash.
-    # Exact MaxMin over millions of fingerprints would be too expensive.
-    limit = div.get('final_candidate_limit', 20000)
-    seed = div.get('seed', 42)
-    heap = []
-    for (smi,) in db.execute('SELECT smiles FROM products'):
-        score = int.from_bytes(hashlib.blake2b((str(seed) + ':' + smi).encode(), digest_size=16).digest(), 'big')
-        item = (-score, smi)
-        if len(heap) < limit:
-            heapq.heappush(heap, item)
-        elif item > heap[0]:
-            heapq.heapreplace(heap, item)
-    candidates = [s for _, s in sorted(heap, reverse=True)]
-    picks = diverse_indices(candidates, count, seed, div.get('final_max_similarity'))
-    with (out / 'enamine_ligands_selected.csv').open('w', newline='') as f:
-        fields = ['synonyms', 'smiles', 'preferred', *PROPERTIES]
-        w = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')
-        w.writeheader()
-        for index in picks:
-            (record,) = db.execute('SELECT record FROM products WHERE smiles=?', (candidates[index],)).fetchone()
-            w.writerow(json.loads(record))
-    print(f'Final selection: {len(picks):,} from {len(candidates):,} candidates', flush=True)
-    return len(picks)
-
-def run(c, base):
-    out = Path(c.get('output_dir', 'triazine_output'))
-    if not out.is_absolute():
-        out = base / out
-    out.mkdir(parents=True, exist_ok=True)
-    # Avoid silently overwriting a previous enumeration.
-    if (out / 'enamine_ligands.csv').exists() or (out / 'products.sqlite').exists():
-        raise FileExistsError(f'{out} contains enumeration results; choose a new output_dir')
-    (out / 'config_used.json').write_text(json.dumps(c, indent=2) + '\n')
-    pools, stats = load_inputs(c, base)
-    routes = c.get('routes', {})
-    workers = c.get('workers', 1)
-    # Pool labels locate files; actual functional groups determine destinations.
-    source = {k: s for pool in pools.values() for k, s in pool.items()}
-    variants = expand_conversions(source, routes, c.get('conversions', {}))
-    stats['conversion_source_entries'] = len(source)
-    stats['conversion_variants_including_sources'] = len(variants)
-    with (out / 'conversion_provenance.csv').open('w', newline='') as f:
-        w = csv.writer(f)
-        w.writerow(['source_and_conversion_path', 'smiles'])
-        w.writerows(variants.items())
-    carbonyls = filtered({k: s for k, s in variants.items()
-                         if molecule(s).HasSubstructMatch(PAT['aldehyde']) or molecule(s).HasSubstructMatch(PAT['ketone'])}, c, 'p3_precursor')
-    alcohols = filtered({k: s for k, s in variants.items() if molecule(s).HasSubstructMatch(PAT['alcohol'])}, c, 'p1') if routes.get('p1_alcohols', True) else {}
-    halides = filtered({k: s for k, s in variants.items() if molecule(s).HasSubstructMatch(PAT['halide'])}, c, 'p3_precursor')
-    carbonyls = reduce_pool(carbonyls, 'p3_carbonyls', c, out)
-    halides = reduce_pool(halides, 'p3_halides', c, out)
-    alcohols = reduce_pool(alcohols, 'p1_alcohols', c, out)
-    amines = variants
-    primary = filtered({k: s for k, s in amines.items() if molecule(s).HasSubstructMatch(PAT['primary'])}, c, 'p2_precursor')
-    secondary = {k: s for k, s in amines.items() if molecule(s).HasSubstructMatch(PAT['secondary'])}
-    p1 = filtered(secondary, c, 'p1') if routes.get('p1_amines', True) else {}
-    p23 = filtered(secondary, c, 'p23') if routes.get('direct_secondary_amines', True) else {}
-    primary = reduce_pool(primary, 'p2_precursors', c, out)
-    p1 = reduce_pool(p1, 'p1_amines', c, out)
-    partners = []
-    if routes.get('reductive_amination', True):
-        partners.append(('reductive_am', list(carbonyls.items())))
-    if routes.get('sn2', False):
-        partners.append(('sn2', list(halides.items())))
-    print(f'Building P2/P3 arms from {len(primary):,} primary amines', flush=True)
-    shared = {'partners': partners, 'p23_filter': c.get('filters', {}).get('p23', {})}
-    for batch in batches(arm_worker, list(primary.items()), shared, workers):
-        p23.update(batch)
-    p23 = reduce_pool(p23, 'p23_arms', c, out)
-    for label, pool in [('p1_amines', p1), ('p1_alcohols', alcohols), ('p2_precursors', primary),
-                        ('p3_carbonyls', carbonyls), ('p3_halides', halides), ('p23_arms', p23)]:
-        stats[label] = len(pool)
-        write_pool(pool, label, out)
-        print(f'{label}: {len(pool):,}', flush=True)
-    tasks = [(k, s, 'amine') for k, s in p1.items()] + [(k, s, 'alcohol') for k, s in alcohols.items()]
-    print(f'Assembling {len(tasks):,} P1 entries x {len(p23):,} P2/P3 arms', flush=True)
-    shared = {'p23_items': list(p23.items()), 'final_filter': c.get('filters', {}).get('final', {}),
-              'preferred_filter': c.get('filters', {}).get('preferred', {})}
-    # Disk-backed global deduplication, including swapped P1/P23 assignments.
-    db = sqlite3.connect(out / 'products.sqlite')
-    db.execute('CREATE TABLE products (smiles TEXT PRIMARY KEY, record TEXT, route_count INTEGER DEFAULT 1)')
-    generated = 0
+def _worker_assemble_amine_p1(p1_kv):
+    """One P1 secondary amine × all P23 amines → [row_dict, …]"""
+    p1_key, p1_smi = p1_kv
+    p1_mol = Chem.MolFromSmiles(p1_smi)
+    if p1_mol is None:
+        return []
+    mono = None
     try:
-        for batch in batches(assembly_worker, tasks, shared, workers):
-            for row in batch:
-                generated += 1
-                db.execute('INSERT INTO products(smiles, record) VALUES (?, ?) ON CONFLICT(smiles) DO UPDATE SET route_count=route_count+1',
-                           (row['smiles'], json.dumps(row)))
-            db.commit()
-        fields = ['synonyms', 'p1_name', 'p1_smiles', 'p1_type', 'p23_name', 'p23_smiles', 'smiles', 'preferred', *PROPERTIES, 'route_count']
-        with (out / 'enamine_ligands.csv').open('w', newline='') as minimal, (out / 'enamine_ligands_full.csv').open('w', newline='') as full:
-            w1 = csv.DictWriter(minimal, fieldnames=['synonyms', 'smiles'])
-            w2 = csv.DictWriter(full, fieldnames=fields)
-            w1.writeheader()
-            w2.writeheader()
-            for smi, record, count in db.execute('SELECT smiles, record, route_count FROM products ORDER BY smiles'):
-                row = json.loads(record)
-                row['route_count'] = count
-                w1.writerow({'synonyms': row['synonyms'], 'smiles': smi})
-                w2.writerow(row)
-        stats['selected_unique'] = select_final(db, c, out)
-        stats['final_routes_passing'] = generated
-        stats['final_unique'] = db.execute('SELECT COUNT(*) FROM products').fetchone()[0]
-    finally:
-        db.close()
-    (out / 'summary.json').write_text(json.dumps(stats, indent=2) + '\n')
-    print(f"Saved {stats['final_unique']:,} unique products to {out}", flush=True)
+        core = Chem.MolFromSmiles(CORE_DICHLORO)
+        prods = _RXN_SNAR_N.RunReactants((core, p1_mol))
+        for ps in prods:
+            m = Chem.MolFromSmiles(Chem.MolToSmiles(ps[0]))
+            if m and m.HasSubstructMatch(_PAT_CL_AROM):
+                mono = Chem.MolToSmiles(m)
+                break
+    except Exception:
+        pass
+    if mono is None:
+        return []
+    mono_mol = Chem.MolFromSmiles(mono)
+    out = []
+    for p23_key, p23_smi in _G_SHARED['p23_items']:
+        p23_mol = Chem.MolFromSmiles(p23_smi)
+        if p23_mol is None:
+            continue
+        try:
+            prods = _RXN_SNAR_N.RunReactants((mono_mol, p23_mol))
+            if prods:
+                full = Chem.MolFromSmiles(Chem.MolToSmiles(prods[0][0]))
+                if full:
+                    out.append({
+                        'synonyms':   f'{p1_key}::{p23_key}',
+                        'p1_name':    p1_key,
+                        'p1_smiles':  p1_smi,
+                        'p1_type':    'amine',
+                        'p23_name':   p23_key,
+                        'p23_smiles': p23_smi,
+                        'smiles':     Chem.MolToSmiles(full),
+                    })
+        except Exception:
+            pass
+    return out
 
 
-
-def select_existing(c, base, csv_path):
-    """Stream an existing CSV through normalization, filters and exact dedup."""
-    out = Path(c.get('output_dir', 'triazine_output'))
-    if not out.is_absolute():
-        out = base / out
-    out.mkdir(parents=True, exist_ok=True)
-    if (out / 'products.sqlite').exists():
-        raise FileExistsError(f'{out} contains results; choose a new output_dir')
-    (out / 'config_used.json').write_text(json.dumps(c, indent=2) + '\n')
-    db = sqlite3.connect(out / 'products.sqlite')
-    db.execute('CREATE TABLE products (smiles TEXT PRIMARY KEY, record TEXT, route_count INTEGER DEFAULT 1)')
-    read = invalid = passed = 0
+def _worker_assemble_alcohol_p1(p1_kv):
+    """One P1 alcohol × all P23 amines → [row_dict, …]"""
+    p1_key, p1_smi = p1_kv
+    p1_mol = Chem.MolFromSmiles(p1_smi)
+    if p1_mol is None:
+        return []
+    mono = None
     try:
-        with Path(csv_path).open(newline='') as f:
-            reader = csv.DictReader(f)
-            if 'smiles' not in (reader.fieldnames or []):
-                raise ValueError('Existing CSV must have a smiles column')
-            for row in reader:
-                read += 1
-                m = molecule(row.get('smiles', ''))
-                if m is None:
-                    invalid += 1
-                    continue
-                smi = canonical(normalize(m, c.get('standardization', {})))
-                if not passes(smi, c.get('filters', {}).get('final', {})):
-                    continue
-                row.update({'smiles': smi, 'synonyms': row.get('synonyms') or row.get('name') or f'row_{read}',
-                            'preferred': passes(smi, c.get('filters', {}).get('preferred', {})), **properties(smi)})
-                db.execute('INSERT INTO products(smiles, record) VALUES (?, ?) ON CONFLICT(smiles) DO UPDATE SET route_count=route_count+1',
-                           (smi, json.dumps(row)))
-                passed += 1
-                if passed % 10000 == 0:
-                    db.commit()
-                if read % 100000 == 0:
-                    print(f'Read {read:,} rows; {passed:,} passing routes', flush=True)
-        db.commit()
-        unique = db.execute('SELECT COUNT(*) FROM products').fetchone()[0]
-        picked = select_final(db, c, out)
-        summary = {'input_rows': read, 'invalid': invalid, 'passing_rows': passed, 'unique_passing': unique, 'selected': picked}
-        (out / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
-        print(f'{read:,} input rows -> {unique:,} unique passing structures -> {picked:,} selected', flush=True)
-    finally:
-        db.close()
+        core = Chem.MolFromSmiles(CORE_DICHLORO)
+        prods = _RXN_SNAR_O.RunReactants((core, p1_mol))
+        for ps in prods:
+            m = Chem.MolFromSmiles(Chem.MolToSmiles(ps[0]))
+            if m and m.HasSubstructMatch(_PAT_CL_AROM):
+                mono = Chem.MolToSmiles(m)
+                break
+    except Exception:
+        pass
+    if mono is None:
+        return []
+    mono_mol = Chem.MolFromSmiles(mono)
+    out = []
+    for p23_key, p23_smi in _G_SHARED['p23_items']:
+        p23_mol = Chem.MolFromSmiles(p23_smi)
+        if p23_mol is None:
+            continue
+        try:
+            prods = _RXN_SNAR_N.RunReactants((mono_mol, p23_mol))
+            if prods:
+                full = Chem.MolFromSmiles(Chem.MolToSmiles(prods[0][0]))
+                if full:
+                    out.append({
+                        'synonyms':   f'{p1_key}::{p23_key}',
+                        'p1_name':    p1_key,
+                        'p1_smiles':  p1_smi,
+                        'p1_type':    'alcohol',
+                        'p23_name':   p23_key,
+                        'p23_smiles': p23_smi,
+                        'smiles':     Chem.MolToSmiles(full),
+                    })
+        except Exception:
+            pass
+    return out
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--config', required=True, help='JSON input file; relative paths resolve beside this file')
-    p.add_argument('--select-existing', help='Select from an existing CSV instead of enumerating SDFs')
-    p.add_argument('--validate-only', action='store_true', help='Validate settings without reading SDFs')
-    args = p.parse_args()
-    config_path = Path(args.config).resolve()
-    try:
-        c = json.loads(config_path.read_text())
-        validate_config(c)
-        if args.validate_only:
-            print('Configuration valid')
-        elif args.select_existing:
-            select_existing(c, config_path.parent, args.select_existing)
-        else:
-            run(c, config_path.parent)
-    except (ValueError, OSError, KeyError) as e:
-        p.exit(2, f'Error: {e}\n')
+
+def _parallel(worker_fn, task_list, n_workers, chunksize=20, shared=None):
+    """Run worker_fn over task_list using a process pool; flatten results.
+
+    shared: dict passed to each worker process once via the pool initializer.
+            Use this for large shared lists (aldehydes, p23 amines, etc.) to
+            avoid re-pickling them for every task.
+    """
+    if n_workers == 1:
+        if shared:
+            _init_worker(shared)
+        results = [worker_fn(t) for t in task_list]
+    else:
+        init_args = (shared,) if shared else ({},)
+        with Pool(n_workers, initializer=_init_worker, initargs=init_args) as pool:
+            results = pool.map(worker_fn, task_list, chunksize=chunksize)
+    return [item for batch in results for item in batch]
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+def main(args):
+    out_dir  = args.out_dir
+    workers  = args.workers
+    os.makedirs(out_dir, exist_ok=True)
+    print(f"\nUsing {workers} worker(s)")
+
+    # ── 1. Load SDF files ────────────────────────────────────────────────────
+    print("\n── Loading SDF files ───────────────────────────────────────────────")
+    df_oh    = load_block(args.enamine_dir, args.alcohols,  'alcohols')
+    df_ald   = load_block(args.enamine_dir, args.aldehydes, 'aldehydes')
+    df_amine = load_block(args.enamine_dir, args.amines,    'amines')
+
+    df_ec     = _load_optional(args.enamine_dir, args.ester_carboxyl, 'esters+carboxyls')
+    df_halide = _load_optional(args.enamine_dir, args.halides,         'halides')
+
+    # ── 2. Build aldehyde pool ───────────────────────────────────────────────
+    print("\n── Aldehyde pool ───────────────────────────────────────────────────")
+    ald_src = pd.concat([df_ald, df_oh, df_ec], ignore_index=True)
+    ald_src = ald_src[ald_src['smiles'].apply(filter_p3_block)].reset_index(drop=True)
+    print(f"  Sources after P3 filter: {len(ald_src):,}")
+
+    aldehydes = {}
+    for _, row in ald_src.iterrows():
+        mol = Chem.MolFromSmiles(row['smiles'])
+        if mol:
+            result = get_aldehyde(mol)
+            if result:
+                aldehydes[row['synonyms']] = result
+    print(f"  Converted to aldehydes: {len(aldehydes):,}")
+    log_pool(aldehydes, 'aldehydes', out_dir)
+
+    # ── 3. Build alcohol pool (P1 O-ether) ───────────────────────────────────
+    print("\n── Alcohol pool ────────────────────────────────────────────────────")
+    oh_src = pd.concat([df_oh, df_ald, df_ec], ignore_index=True)
+    oh_src = oh_src[oh_src['smiles'].apply(filter_p1_block)].reset_index(drop=True)
+    print(f"  Sources after P1 filter: {len(oh_src):,}")
+
+    alcohols = {}
+    for _, row in oh_src.iterrows():
+        mol = Chem.MolFromSmiles(row['smiles'])
+        if mol:
+            result = get_alcohol(mol)
+            if result:
+                alcohols[row['synonyms']] = result
+    print(f"  Converted to alcohols: {len(alcohols):,}")
+    log_pool(alcohols, 'alcohols', out_dir)
+
+    # ── 4. Build halide pool (optional) ─────────────────────────────────────
+    print("\n── Halide pool ─────────────────────────────────────────────────────")
+    halides = {}
+    if not df_halide.empty:
+        for _, row in df_halide[df_halide['smiles'].apply(filter_p3_block)].iterrows():
+            mol = Chem.MolFromSmiles(row['smiles'])
+            if mol and mol.HasSubstructMatch(_PAT_HALIDE):
+                halides[row['synonyms']] = Chem.MolToSmiles(mol)
+        print(f"  Valid halides: {len(halides):,}")
+        log_pool(halides, 'halides', out_dir)
+    else:
+        print("  [skip] no halide SDF — SN2 path skipped")
+
+    # ── 5. Classify amines ───────────────────────────────────────────────────
+    print("\n── Amine classification ────────────────────────────────────────────")
+    primary_amines   = {}
+    secondary_amines = {}
+    for _, row in df_amine.iterrows():
+        smi, aclass = classify_and_process_amine(row['smiles'])
+        if aclass == 'primary':
+            primary_amines[row['synonyms']] = smi
+        elif aclass == 'secondary':
+            secondary_amines[row['synonyms']] = smi
+
+    primary_amines   = {k: v for k, v in primary_amines.items()   if filter_p2_block(v)}
+    sec_amines_p1    = {k: v for k, v in secondary_amines.items() if filter_p1_block(v)}
+    sec_amines_p23   = {k: v for k, v in secondary_amines.items() if filter_p2_block(v)}
+
+    print(f"  Primary amines (P2/P3-ready): {len(primary_amines):,}")
+    print(f"  Secondary amines for P1:      {len(sec_amines_p1):,}")
+    print(f"  Secondary amines for P2/P3:   {len(sec_amines_p23):,}")
+    log_pool(primary_amines, 'primary_amines',      out_dir)
+    log_pool(sec_amines_p1,  'secondary_amines_p1', out_dir)
+
+    # ── 6. Synthesise P2/P3 secondary amines (parallelised) ──────────────────
+    print("\n── P2/P3 secondary amine synthesis ─────────────────────────────────")
+    p23_sec_amines = {}
+
+    ald_items = list(aldehydes.items())
+    hal_items = list(halides.items())
+
+    # Reductive amination  — shared list sent once per worker via initializer
+    ra_tasks = list(primary_amines.items())
+    print(f"  Reductive amination: {len(primary_amines):,} × {len(aldehydes):,} "
+          f"= {len(primary_amines)*len(aldehydes):,} pairs …")
+    for name, smi in _parallel(_worker_reductive_am, ra_tasks, workers,
+                                shared={'ald_items': ald_items}):
+        p23_sec_amines[name] = smi
+    print(f"    → {len(p23_sec_amines):,} products")
+
+    # SN2
+    if halides:
+        sn2_tasks = list(primary_amines.items())
+        before = len(p23_sec_amines)
+        print(f"  SN2: {len(primary_amines):,} × {len(halides):,} "
+              f"= {len(primary_amines)*len(halides):,} pairs …")
+        for name, smi in _parallel(_worker_sn2, sn2_tasks, workers,
+                                    shared={'hal_items': hal_items}):
+            p23_sec_amines[name] = smi
+        print(f"    → {len(p23_sec_amines)-before:,} new products")
+
+    # Direct secondary amines
+    for k, v in sec_amines_p23.items():
+        p23_sec_amines[f'direct_{k}'] = v
+    print(f"  Total P2/P3 pool (incl. direct): {len(p23_sec_amines):,}")
+
+    # Post-synthesis filter: MW ≤ 300, RotBonds ≤ 5
+    before_post = len(p23_sec_amines)
+    p23_sec_amines = {k: v for k, v in p23_sec_amines.items() if filter_post_p23(v)}
+    print_filter_summary("  Post-synthesis P2/P3 filter (MW≤300, RotBonds≤5)",
+                         before_post, len(p23_sec_amines))
+    log_pool(p23_sec_amines, 'p23_secondary_amines', out_dir)
+
+    # ── 7. Assembly (parallelised) ────────────────────────────────────────────
+    print("\n── Assembly ─────────────────────────────────────────────────────────")
+    p23_items = list(p23_sec_amines.items())
+    result_rows = []
+    assemble_shared = {'p23_items': p23_items}
+
+    # Pipeline A: P1 = secondary amine  — p23_items sent once per worker
+    a_tasks = list(sec_amines_p1.items())
+    print(f"  Pipeline A (P1=amine): {len(sec_amines_p1):,} × {len(p23_sec_amines):,} "
+          f"= {len(sec_amines_p1)*len(p23_sec_amines):,} pairs …")
+    result_rows += _parallel(_worker_assemble_amine_p1, a_tasks, workers,
+                             shared=assemble_shared)
+    print(f"    → {len(result_rows):,} products")
+
+    # Pipeline B: P1 = alcohol
+    b_tasks  = list(alcohols.items())
+    before_b = len(result_rows)
+    print(f"  Pipeline B (P1=alcohol): {len(alcohols):,} × {len(p23_sec_amines):,} "
+          f"= {len(alcohols)*len(p23_sec_amines):,} pairs …")
+    result_rows += _parallel(_worker_assemble_alcohol_p1, b_tasks, workers,
+                             shared=assemble_shared)
+    print(f"    → {len(result_rows)-before_b:,} products")
+
+    result_df = pd.DataFrame(result_rows)
+    print(f"\n  Total assembled: {len(result_df):,}")
+
+    # ── 8. Save ───────────────────────────────────────────────────────────────
+    out_path = os.path.join(args.enamine_dir, 'enamine_ligands.csv')
+    if os.path.exists(out_path):
+        out_path = os.path.join(args.enamine_dir,
+                                f'enamine_ligands_{now.strftime("%Y%m%d_%H%M%S")}.csv')
+
+    result_df[['synonyms', 'smiles']].to_csv(out_path, index=False)
+    print(f"\nSaved (minimal) → {out_path}")
+
+    full_path = out_path.replace('.csv', '_full.csv')
+    result_df.to_csv(full_path, index=False)
+    print(f"Saved (full)    → {full_path}")
+
+    print("\n── Assembled molecule property summary ──────────────────────────────")
+    log_pool(dict(zip(result_df['synonyms'], result_df['smiles'])),
+             'assembled_molecules', out_dir)
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(
+        description='Build combinatorial triazine library from ENAMINE SDF building blocks.'
+    )
+    parser.add_argument('--enamine_dir', required=True,
+                        help='Directory containing the SDF files.')
+    # Required
+    parser.add_argument('--alcohols',  required=True,
+                        help='Filename prefix for alcohol/OH SDF(s).  e.g. "alcs"')
+    parser.add_argument('--aldehydes', required=True,
+                        help='Filename prefix for aldehyde SDF(s).  e.g. "aldehyde"')
+    parser.add_argument('--amines',    required=True,
+                        help='Filename prefix for amine SDF(s).  e.g. "amines"')
+    # Optional
+    parser.add_argument('--ester_carboxyl', default=None,
+                        help='(optional) Prefix for combined ester+carboxyl SDF(s).')
+    parser.add_argument('--halides', default=None,
+                        help='(optional) Prefix for halide SDF(s).  Skips SN2 if absent.')
+    parser.add_argument('--out_dir', default='bb_props',
+                        help='Directory for per-pool property CSVs (default: bb_props/).')
+    parser.add_argument('--workers', type=int, default=max(1, cpu_count() - 1),
+                        help='Number of parallel worker processes '
+                             f'(default: cpu_count-1 = {max(1, cpu_count()-1)}).')
+    args = parser.parse_args()
+    main(args)
