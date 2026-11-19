@@ -513,6 +513,69 @@ def main(args):
     os.makedirs(out_dir, exist_ok=True)
     print(f"\nUsing {workers} worker(s)")
 
+    # ── Resume path: load pre-built pools and skip to assembly ───────────────
+    if args.skip_synthesis:
+        def _load_pool(label):
+            path = os.path.join(out_dir, f'props_{label}.csv')
+            if not os.path.exists(path):
+                raise FileNotFoundError(
+                    f"--skip_synthesis requires {path} from a previous run. "
+                    f"Run without --skip_synthesis first.")
+            df = pd.read_csv(path)
+            return dict(zip(df['name'], df['smiles']))
+
+        print("\n── Skipping synthesis — loading saved pools from", out_dir, "────────")
+        sec_amines_p1   = _load_pool('secondary_amines_p1')
+        alcohols        = _load_pool('alcohols')
+        p23_sec_amines  = _load_pool('p23_secondary_amines')
+        print(f"  sec_amines_p1 : {len(sec_amines_p1):,}")
+        print(f"  alcohols      : {len(alcohols):,}")
+        print(f"  p23_sec_amines: {len(p23_sec_amines):,}")
+
+        if args.prefilter_p23_sim is not None:
+            print(f"\n── P2/P3 reference pre-filter (sim >= {args.prefilter_p23_sim}) ────────────")
+            p23_sec_amines = _prefilter_p23_by_similarity(
+                p23_sec_amines, args.prefilter_p23_sim
+            )
+
+        # Jump straight to assembly (step 7)
+        print("\n── Assembly ─────────────────────────────────────────────────────────")
+        p23_items = list(p23_sec_amines.items())
+        result_rows = []
+        assemble_shared = {'p23_items': p23_items}
+
+        a_tasks = list(sec_amines_p1.items())
+        print(f"  Pipeline A (P1=amine): {len(sec_amines_p1):,} × {len(p23_sec_amines):,} "
+              f"= {len(sec_amines_p1)*len(p23_sec_amines):,} pairs …")
+        result_rows += _parallel(_worker_assemble_amine_p1, a_tasks, workers,
+                                 shared=assemble_shared)
+        print(f"    → {len(result_rows):,} products")
+
+        if getattr(args, 'skip_alcohol_p1', False):
+            print("  Pipeline B (P1=alcohol): SKIPPED (--skip_alcohol_p1)")
+        else:
+            b_tasks  = list(alcohols.items())
+            before_b = len(result_rows)
+            print(f"  Pipeline B (P1=alcohol): {len(alcohols):,} × {len(p23_sec_amines):,} "
+                  f"= {len(alcohols)*len(p23_sec_amines):,} pairs …")
+            result_rows += _parallel(_worker_assemble_alcohol_p1, b_tasks, workers,
+                                     shared=assemble_shared)
+            print(f"    → {len(result_rows)-before_b:,} products")
+
+        result_df = pd.DataFrame(result_rows)
+        print(f"\n  Total assembled: {len(result_df):,}")
+
+        out_path = os.path.join(args.enamine_dir, 'enamine_ligands.csv')
+        if os.path.exists(out_path):
+            out_path = os.path.join(args.enamine_dir,
+                                    f'enamine_ligands_{now.strftime("%Y%m%d_%H%M%S")}.csv')
+        result_df[['synonyms', 'smiles']].to_csv(out_path, index=False)
+        print(f"\nSaved (minimal) → {out_path}")
+        full_path = out_path.replace('.csv', '_full.csv')
+        result_df.to_csv(full_path, index=False)
+        print(f"Saved (full)    → {full_path}")
+        return
+
     # ── 1. Load SDF files ────────────────────────────────────────────────────
     print("\n── Loading SDF files ───────────────────────────────────────────────")
     df_oh    = load_block(args.enamine_dir, args.alcohols,  'alcohols')
@@ -717,5 +780,9 @@ if __name__ == '__main__':
                         help='(optional) Skip Pipeline B (P1=alcohol × P2/P3). '
                              'Pipeline B is ~4x larger than A and can be deferred to a '
                              'second run or GreatLakes SLURM job.')
+    parser.add_argument('--skip_synthesis', action='store_true',
+                        help='Skip SDF loading and pool synthesis; load pre-built '
+                             'pool CSVs from --out_dir and jump straight to assembly. '
+                             'Requires a completed prior run up through step 6.')
     args = parser.parse_args()
     main(args)
