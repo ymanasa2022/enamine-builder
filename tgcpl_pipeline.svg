@@ -1,0 +1,227 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 1820" width="860" height="1820" font-family="Helvetica, Arial, sans-serif">
+
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#555"/>
+    </marker>
+    <marker id="arrowhead-opt" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#999"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="860" height="1820" fill="#F8F8F8"/>
+
+  <!-- Title -->
+  <text x="430" y="38" text-anchor="middle" font-size="18" font-weight="bold" fill="#1A1A2E">TgCPL ENAMINE Library Pipeline</text>
+  <text x="430" y="56" text-anchor="middle" font-size="11" fill="#666">0_build_enamine.py &#x2192; 1_fingerprint.py &#x2192; 1b_reference_filter.py &#x2192; 2_cluster_pick.py</text>
+
+  <!-- STEP 0 - INPUT SDFs -->
+  <rect x="40" y="76" width="210" height="60" rx="6" fill="#D6EAF8" stroke="#2980B9" stroke-width="1.5"/>
+  <text x="145" y="99" text-anchor="middle" font-size="12" font-weight="bold" fill="#1A5276">Amines SDF</text>
+  <text x="145" y="115" text-anchor="middle" font-size="10" fill="#1A5276">Primary + secondary amines</text>
+  <text x="145" y="128" text-anchor="middle" font-size="10" fill="#1A5276">ENAMINE building blocks</text>
+
+  <rect x="325" y="76" width="210" height="60" rx="6" fill="#D6EAF8" stroke="#2980B9" stroke-width="1.5"/>
+  <text x="430" y="99" text-anchor="middle" font-size="12" font-weight="bold" fill="#1A5276">Alcohols SDF</text>
+  <text x="430" y="115" text-anchor="middle" font-size="10" fill="#1A5276">P1 alcohol building blocks</text>
+  <text x="430" y="128" text-anchor="middle" font-size="10" fill="#1A5276">3,536 entries</text>
+
+  <rect x="610" y="76" width="210" height="60" rx="6" fill="#D6EAF8" stroke="#2980B9" stroke-width="1.5"/>
+  <text x="715" y="99" text-anchor="middle" font-size="12" font-weight="bold" fill="#1A5276">Aldehydes SDF</text>
+  <text x="715" y="115" text-anchor="middle" font-size="10" fill="#1A5276">For reductive amination</text>
+  <text x="715" y="128" text-anchor="middle" font-size="10" fill="#1A5276">ENAMINE building blocks</text>
+
+  <line x1="145" y1="136" x2="145" y2="168" stroke="#555" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <line x1="430" y1="136" x2="430" y2="168" stroke="#555" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <line x1="715" y1="136" x2="715" y2="168" stroke="#555" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- STEP 1 - POOL BUILDING -->
+  <rect x="40" y="170" width="780" height="140" rx="8" fill="#FDFEFE" stroke="#7F8C8D" stroke-width="1.5"/>
+  <text x="430" y="192" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C3E50">0_build_enamine.py  &#x2014;  Steps 1&#x2013;5: Pool Building</text>
+
+  <rect x="60" y="203" width="200" height="92" rx="5" fill="#EBF5FB" stroke="#85C1E9" stroke-width="1"/>
+  <text x="160" y="220" text-anchor="middle" font-size="11" font-weight="bold" fill="#154360">P1 Secondary Amines</text>
+  <text x="160" y="236" text-anchor="middle" font-size="10" fill="#154360">840 entries</text>
+  <text x="160" y="251" text-anchor="middle" font-size="9.5" fill="#555">Filter: MW &#x2264; 300</text>
+  <text x="160" y="264" text-anchor="middle" font-size="9.5" fill="#555">logP &#x2264; 5, RotBonds &#x2264; 5</text>
+  <text x="160" y="277" text-anchor="middle" font-size="9.5" fill="#555">1&#xB0; amine excluded, HBD &#x2264; 3</text>
+  <text x="160" y="290" text-anchor="middle" font-size="9.5" fill="#555">Ring size &#x2264; 8</text>
+
+  <rect x="330" y="203" width="200" height="92" rx="5" fill="#EBF5FB" stroke="#85C1E9" stroke-width="1"/>
+  <text x="430" y="220" text-anchor="middle" font-size="11" font-weight="bold" fill="#154360">P1 Alcohols</text>
+  <text x="430" y="236" text-anchor="middle" font-size="10" fill="#154360">3,536 entries</text>
+  <text x="430" y="251" text-anchor="middle" font-size="9.5" fill="#555">Filter: MW &#x2264; 300</text>
+  <text x="430" y="264" text-anchor="middle" font-size="9.5" fill="#555">logP &#x2264; 5, RotBonds &#x2264; 5</text>
+  <text x="430" y="277" text-anchor="middle" font-size="9.5" fill="#555">No aldehydes/acids</text>
+
+  <rect x="600" y="203" width="200" height="92" rx="5" fill="#EBF5FB" stroke="#85C1E9" stroke-width="1"/>
+  <text x="700" y="220" text-anchor="middle" font-size="11" font-weight="bold" fill="#154360">Primary Amines (P2/P3)</text>
+  <text x="700" y="236" text-anchor="middle" font-size="10" fill="#154360">for reductive amination</text>
+  <text x="700" y="251" text-anchor="middle" font-size="9.5" fill="#555">Filter: MW &#x2264; 200</text>
+  <text x="700" y="264" text-anchor="middle" font-size="9.5" fill="#555">logP &#x2264; 4, RotBonds &#x2264; 4</text>
+  <text x="700" y="277" text-anchor="middle" font-size="9.5" fill="#555">Exactly 1 primary NH&#x2082;</text>
+
+  <line x1="430" y1="310" x2="430" y2="344" stroke="#555" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- STEP 2 - P2/P3 SYNTHESIS -->
+  <rect x="40" y="346" width="780" height="130" rx="8" fill="#FDFEFE" stroke="#7F8C8D" stroke-width="1.5"/>
+  <text x="430" y="368" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C3E50">0_build_enamine.py  &#x2014;  Step 6: P2/P3 Secondary Amine Synthesis</text>
+
+  <rect x="60" y="377" width="210" height="84" rx="5" fill="#FDEBD0" stroke="#E59866" stroke-width="1"/>
+  <text x="165" y="394" text-anchor="middle" font-size="11" font-weight="bold" fill="#6E2F0A">Reductive Amination</text>
+  <text x="165" y="410" text-anchor="middle" font-size="9.5" fill="#555">Primary amine &#xD7; aldehyde</text>
+  <text x="165" y="423" text-anchor="middle" font-size="9.5" fill="#555">NaBH&#x2083;CN reduction</text>
+  <text x="165" y="436" text-anchor="middle" font-size="9.5" fill="#555">R-NH&#x2082; + R'CHO &#x2192; R-NH-CH&#x2082;R'</text>
+  <text x="165" y="453" text-anchor="middle" font-size="10" font-weight="bold" fill="#6E2F0A">&#x2192; millions of products</text>
+
+  <rect x="325" y="377" width="210" height="84" rx="5" fill="#FDEBD0" stroke="#E59866" stroke-width="1"/>
+  <text x="430" y="394" text-anchor="middle" font-size="11" font-weight="bold" fill="#6E2F0A">SN2 Alkylation</text>
+  <text x="430" y="410" text-anchor="middle" font-size="9.5" fill="#555">Primary amine &#xD7; halide</text>
+  <text x="430" y="423" text-anchor="middle" font-size="9.5" fill="#555">R-NH&#x2082; + R'X &#x2192; R-NH-R'</text>
+  <text x="430" y="436" text-anchor="middle" font-size="9.5" fill="#555">(optional, if halides SDF)</text>
+
+  <rect x="590" y="377" width="210" height="84" rx="5" fill="#FDEBD0" stroke="#E59866" stroke-width="1"/>
+  <text x="695" y="394" text-anchor="middle" font-size="11" font-weight="bold" fill="#6E2F0A">Direct Secondary Amines</text>
+  <text x="695" y="410" text-anchor="middle" font-size="9.5" fill="#555">Pre-formed R-NH-R'</text>
+  <text x="695" y="423" text-anchor="middle" font-size="9.5" fill="#555">from amines SDF directly</text>
+
+  <text x="430" y="478" text-anchor="middle" font-size="10" fill="#C0392B">Post-synthesis filter: MW &#x2264; 300, RotBonds &#x2264; 5</text>
+
+  <rect x="280" y="486" width="300" height="28" rx="4" fill="#E8F8F5" stroke="#1ABC9C" stroke-width="1.5"/>
+  <text x="430" y="505" text-anchor="middle" font-size="12" font-weight="bold" fill="#0E6655">P2/P3 Pool:  10,404,191 entries</text>
+
+  <line x1="430" y1="514" x2="430" y2="546" stroke="#555" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- STEP 2b - OPTIONAL PREFILTER -->
+  <rect x="160" y="548" width="540" height="76" rx="8" fill="#FEF9E7" stroke="#F4D03F" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="430" y="568" text-anchor="middle" font-size="12" font-weight="bold" fill="#7D6608">Optional: --prefilter_p23_sim 0.20</text>
+  <text x="430" y="585" text-anchor="middle" font-size="10" fill="#7D6608">Morgan FP Tanimoto &#x2265; 0.20 to Cpd18/12/13 P2/P3 reference fragments</text>
+  <text x="430" y="600" text-anchor="middle" font-size="10" fill="#7D6608">Keeps ~82K entries  (0.8%)  &#x2192;  ~127&#xD7; fewer assembly pairs  (619s runtime)</text>
+  <text x="790" y="588" text-anchor="middle" font-size="10" font-style="italic" fill="#999">optional</text>
+
+  <line x1="430" y1="624" x2="430" y2="656" stroke="#555" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- STEP 3 - ASSEMBLY -->
+  <rect x="40" y="658" width="780" height="140" rx="8" fill="#FDFEFE" stroke="#7F8C8D" stroke-width="1.5"/>
+  <text x="430" y="680" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C3E50">0_build_enamine.py  &#x2014;  Step 7: Triazine Assembly (SNAr)</text>
+  <text x="430" y="696" text-anchor="middle" font-size="10" fill="#666">2-CN-4,6-dichloro-1,3,5-triazine scaffold  +  P1  +  P2/P3</text>
+
+  <rect x="60" y="706" width="330" height="80" rx="5" fill="#F4ECF7" stroke="#9B59B6" stroke-width="1"/>
+  <text x="225" y="724" text-anchor="middle" font-size="11" font-weight="bold" fill="#4A235A">Pipeline A  (P1 = secondary amine)</text>
+  <text x="225" y="741" text-anchor="middle" font-size="10" fill="#555">840 P1 amines &#xD7; 82,019 P2/P3 (prefiltered)</text>
+  <text x="225" y="756" text-anchor="middle" font-size="10" fill="#C0392B">= 68,895,960 pairs  (8.74B unfiltered)</text>
+  <text x="225" y="771" text-anchor="middle" font-size="9.5" fill="#555">SNAr at Cl-4 (amine), then Cl-6 (P2/P3 amine)</text>
+  <text x="225" y="784" text-anchor="middle" font-size="9.5" fill="#4A235A">R&#xB9;-NH-triazine(CN)-NHR&#xB2;R&#xB3;</text>
+
+  <rect x="460" y="706" width="340" height="80" rx="5" fill="#F4ECF7" stroke="#9B59B6" stroke-width="1" stroke-dasharray="5,3"/>
+  <text x="630" y="724" text-anchor="middle" font-size="11" font-weight="bold" fill="#4A235A">Pipeline B  (P1 = alcohol)  [optional]</text>
+  <text x="630" y="741" text-anchor="middle" font-size="10" fill="#555">3,536 P1 alcohols &#xD7; 82,019 P2/P3 (prefiltered)</text>
+  <text x="630" y="756" text-anchor="middle" font-size="10" fill="#C0392B">= 290,019,184 pairs  (36.8B unfiltered)</text>
+  <text x="630" y="771" text-anchor="middle" font-size="9.5" fill="#555">SNAr at Cl-4 (alcohol O-ether)</text>
+  <text x="630" y="784" text-anchor="middle" font-size="9.5" fill="#4A235A">skip with --skip_alcohol_p1</text>
+
+  <line x1="430" y1="798" x2="430" y2="828" stroke="#555" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- OUTPUT 1 -->
+  <rect x="200" y="830" width="460" height="40" rx="6" fill="#D5F5E3" stroke="#27AE60" stroke-width="1.5"/>
+  <text x="430" y="847" text-anchor="middle" font-size="11" font-weight="bold" fill="#145A32">enamine_ligands.csv</text>
+  <text x="430" y="863" text-anchor="middle" font-size="10" fill="#145A32">All assembled triazine compounds  (synonyms + SMILES)</text>
+
+  <line x1="430" y1="870" x2="430" y2="902" stroke="#555" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- STEP 4 - FINGERPRINTING -->
+  <rect x="40" y="904" width="780" height="110" rx="8" fill="#FDFEFE" stroke="#7F8C8D" stroke-width="1.5"/>
+  <text x="430" y="926" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C3E50">1_fingerprint.py  &#x2014;  Drug-likeness Filter + Morgan Fingerprints</text>
+  <rect x="60" y="934" width="740" height="68" rx="5" fill="#FDFEFE"/>
+  <text x="200" y="952" text-anchor="middle" font-size="10" font-weight="bold" fill="#2C3E50">Drug-likeness Filters (Lipinski+)</text>
+  <text x="200" y="967" text-anchor="middle" font-size="9.5" fill="#555">MW: 200&#x2013;500 Da</text>
+  <text x="200" y="980" text-anchor="middle" font-size="9.5" fill="#555">logP &#x2264; 5    HBD &#x2264; 5    HBA &#x2264; 10</text>
+  <text x="200" y="993" text-anchor="middle" font-size="9.5" fill="#555">RotBonds &#x2264; 10    TPSA &#x2264; 140 &#xC5;&#xB2;</text>
+  <line x1="390" y1="934" x2="390" y2="998" stroke="#DDD" stroke-width="1"/>
+  <text x="570" y="952" text-anchor="middle" font-size="10" font-weight="bold" fill="#2C3E50">Fingerprints</text>
+  <text x="570" y="967" text-anchor="middle" font-size="9.5" fill="#555">Morgan FP  radius=2, nBits=1024</text>
+  <text x="570" y="980" text-anchor="middle" font-size="9.5" fill="#555">Stored as fingerprints.npy</text>
+  <text x="570" y="993" text-anchor="middle" font-size="9.5" fill="#555">Row-aligned to filtered_ligands.csv</text>
+
+  <line x1="430" y1="1014" x2="430" y2="1046" stroke="#555" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- OUTPUT 2 -->
+  <rect x="130" y="1048" width="600" height="40" rx="6" fill="#D5F5E3" stroke="#27AE60" stroke-width="1.5"/>
+  <text x="430" y="1065" text-anchor="middle" font-size="11" font-weight="bold" fill="#145A32">filtered_ligands.csv  +  fingerprints.npy</text>
+  <text x="430" y="1081" text-anchor="middle" font-size="10" fill="#145A32">Drug-like compounds  (count depends on assembly size)</text>
+
+  <line x1="430" y1="1088" x2="430" y2="1120" stroke="#555" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- STEP 5 - REFERENCE FILTER -->
+  <rect x="40" y="1122" width="780" height="168" rx="8" fill="#FDFEFE" stroke="#7F8C8D" stroke-width="1.5"/>
+  <text x="430" y="1144" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C3E50">1b_reference_filter.py  &#x2014;  TgCPL Similarity Filter</text>
+
+  <rect x="60" y="1152" width="310" height="124" rx="5" fill="#FDEDEC" stroke="#E74C3C" stroke-width="1"/>
+  <text x="215" y="1170" text-anchor="middle" font-size="11" font-weight="bold" fill="#7B241C">Reference Leads</text>
+  <text x="215" y="1186" text-anchor="middle" font-size="9.5" fill="#555">Cpd1  &#x2014; 222 nM TgCPL, 16&#xD7; sel.</text>
+  <text x="215" y="1200" text-anchor="middle" font-size="9.5" fill="#555">Cpd12 &#x2014; 558 nM TgCPL, 33&#xD7; sel.  (cyclohexyl P3)</text>
+  <text x="215" y="1214" text-anchor="middle" font-size="9.5" fill="#555">Cpd13 &#x2014; 497 nM TgCPL, 40&#xD7; sel.  (cycloheptyl P3)</text>
+  <text x="215" y="1228" text-anchor="middle" font-size="9.5" font-weight="bold" fill="#7B241C">Cpd18 &#x2014; 207 nM TgCPL, 33&#xD7; sel.  &#x2605; BEST</text>
+  <text x="215" y="1242" text-anchor="middle" font-size="9" font-style="italic" fill="#888">piperidinylethyl P2 + cyclohexyl-4-FBn P3</text>
+  <text x="215" y="1258" text-anchor="middle" font-size="9.5" fill="#555">Morgan FP Tanimoto  &#x2265; 0.30  to any lead</text>
+  <text x="215" y="1272" text-anchor="middle" font-size="9.5" fill="#555">Ranked by tanimoto_max (all 4 scores saved)</text>
+
+  <rect x="430" y="1152" width="370" height="124" rx="5" fill="#EBF5FB" stroke="#3498DB" stroke-width="1"/>
+  <text x="615" y="1170" text-anchor="middle" font-size="11" font-weight="bold" fill="#154360">Optional Structural Filters</text>
+  <text x="615" y="1192" text-anchor="middle" font-size="10" font-weight="bold" fill="#154360">--require_basic_n</text>
+  <text x="615" y="1207" text-anchor="middle" font-size="9.5" fill="#555">At least 1 basic sp3 N</text>
+  <text x="615" y="1220" text-anchor="middle" font-size="9.5" fill="#555">Engages TgCPL Glu75/Asp218/Asp78</text>
+  <text x="615" y="1233" text-anchor="middle" font-size="9.5" fill="#555">Key for selectivity over HsCPL</text>
+  <text x="615" y="1252" text-anchor="middle" font-size="10" font-weight="bold" fill="#154360">--require_scaffold</text>
+  <text x="615" y="1267" text-anchor="middle" font-size="9.5" fill="#555">Cyanotriazine (N#Cc1ncncn1)</text>
+  <text x="615" y="1280" text-anchor="middle" font-size="9.5" fill="#555">+ morpholine (N1CCOCC1) warhead</text>
+
+  <line x1="430" y1="1290" x2="430" y2="1322" stroke="#555" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- OUTPUT 3 -->
+  <rect x="130" y="1324" width="600" height="40" rx="6" fill="#D5F5E3" stroke="#27AE60" stroke-width="1.5"/>
+  <text x="430" y="1341" text-anchor="middle" font-size="11" font-weight="bold" fill="#145A32">similar_ligands.csv  +  similar_fps.npy</text>
+  <text x="430" y="1357" text-anchor="middle" font-size="10" fill="#145A32">TgCPL-similar compounds, ranked by tanimoto_max</text>
+
+  <line x1="430" y1="1364" x2="430" y2="1396" stroke="#555" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- STEP 6 - CLUSTERING -->
+  <rect x="40" y="1398" width="780" height="96" rx="8" fill="#FDFEFE" stroke="#7F8C8D" stroke-width="1.5"/>
+  <text x="430" y="1420" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C3E50">2_cluster_pick.py  &#x2014;  Diversity Selection</text>
+  <text x="430" y="1440" text-anchor="middle" font-size="10" fill="#555">Butina clustering on Morgan fingerprints</text>
+  <text x="430" y="1456" text-anchor="middle" font-size="10" fill="#555">Tanimoto cutoff (default 0.4)  &#x2192;  one representative picked per cluster</text>
+  <text x="430" y="1472" text-anchor="middle" font-size="10" fill="#555">Cluster leader = compound with highest tanimoto_max to TgCPL leads</text>
+  <text x="430" y="1488" text-anchor="middle" font-size="10" fill="#555">Maximises chemical diversity while retaining TgCPL-relevant chemistry</text>
+
+  <line x1="430" y1="1494" x2="430" y2="1526" stroke="#555" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- FINAL OUTPUT -->
+  <rect x="160" y="1528" width="540" height="60" rx="8" fill="#D5F5E3" stroke="#27AE60" stroke-width="2"/>
+  <text x="430" y="1551" text-anchor="middle" font-size="13" font-weight="bold" fill="#0E6655">picked_ligands.csv</text>
+  <text x="430" y="1567" text-anchor="middle" font-size="10" fill="#145A32">Diverse, TgCPL-similar candidates</text>
+  <text x="430" y="1581" text-anchor="middle" font-size="10" fill="#145A32">&#x2192; Docking against TgCPL (Glide / Vina)</text>
+
+  <!-- LEGEND -->
+  <rect x="40" y="1618" width="780" height="166" rx="8" fill="#F2F3F4" stroke="#BDC3C7" stroke-width="1"/>
+  <text x="430" y="1638" text-anchor="middle" font-size="12" font-weight="bold" fill="#2C3E50">Pipeline Summary</text>
+  <rect x="60" y="1650" width="14" height="14" rx="2" fill="#D6EAF8" stroke="#2980B9" stroke-width="1"/>
+  <text x="82" y="1662" font-size="10" fill="#333">Input SDF building blocks (ENAMINE catalog)</text>
+  <rect x="60" y="1672" width="14" height="14" rx="2" fill="#FDEBD0" stroke="#E59866" stroke-width="1"/>
+  <text x="82" y="1684" font-size="10" fill="#333">Synthetic reactions (RDKit RunReactants)</text>
+  <rect x="60" y="1694" width="14" height="14" rx="2" fill="#F4ECF7" stroke="#9B59B6" stroke-width="1"/>
+  <text x="82" y="1706" font-size="10" fill="#333">Assembly (SNAr &#xD7; 2 to triazine scaffold)</text>
+  <rect x="60" y="1716" width="14" height="14" rx="2" fill="#D5F5E3" stroke="#27AE60" stroke-width="1.5"/>
+  <text x="82" y="1728" font-size="10" fill="#333">Output files</text>
+  <rect x="60" y="1738" width="14" height="14" rx="2" fill="#FEF9E7" stroke="#F4D03F" stroke-width="1.5"/>
+  <line x1="60" y1="1745" x2="74" y2="1745" stroke="#F4D03F" stroke-width="1" stroke-dasharray="3,2"/>
+  <text x="82" y="1750" font-size="10" fill="#333">Optional step (flag required)</text>
+  <text x="470" y="1662" font-size="10" fill="#333">P1 pool:  840 sec. amines  +  3,536 alcohols</text>
+  <text x="470" y="1680" font-size="10" fill="#333">P2/P3 pool:  10,404,191 entries</text>
+  <text x="470" y="1698" font-size="10" fill="#333">Assembly A:  68.9M pairs (prefiltered) / 8.74B (unfiltered)  |  Assembly B:  290M / 36.8B</text>
+  <text x="470" y="1716" font-size="10" fill="#333">Similarity threshold:  Tanimoto &#x2265; 0.30 (1b step)</text>
+  <text x="470" y="1734" font-size="10" fill="#333">Pre-filter option:  Tanimoto &#x2265; 0.20 (pre-assembly)</text>
+  <text x="470" y="1752" font-size="10" fill="#333">Script: 0_build_enamine.py &#x2192; 1_fingerprint.py &#x2192; 1b_reference_filter.py &#x2192; 2_cluster_pick.py</text>
+  <text x="430" y="1778" text-anchor="middle" font-size="9" fill="#999">TgCPL ENAMINE Campaign  |  O'Meara Lab  |  University of Michigan</text>
+
+</svg>
