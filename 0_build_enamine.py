@@ -681,6 +681,9 @@ def main(args):
              'assembled_molecules', out_dir)
 
 
+import multiprocessing
+multiprocessing.set_start_method("fork", force=True)
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Build combinatorial triazine library from ENAMINE SDF building blocks.'
