@@ -18,7 +18,7 @@ Speed notes
   - Cross-product loops parallelised with multiprocessing (--workers N)
 """
 
-from rdkit import Chem, DataStructs
+from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors
 import argparse
 import pandas as pd
@@ -28,76 +28,6 @@ import glob as _glob
 from multiprocessing import Pool, cpu_count
 
 
-# ---------------------------------------------------------------------------
-# TgCPL reference P2/P3 secondary amines (extracted from best leads).
-# Used by --prefilter_p23_sim to rank the P2/P3 pool before assembly.
-# Cpd18 is the best lead (207 nM TgCPL, 33x sel) — piperidinylethyl P2 +
-# cyclohexyl-4-fluorobenzyl P3.  Cpd12/13 have optimal selectivity.
-# The direct secondary amine that attaches to triazine via SNAr is used.
-# ---------------------------------------------------------------------------
-_P23_REFERENCE_SMILES = [
-    # Cpd18 P2/P3 amine: piperidinylethyl × cyclohexyl-4-fluorobenzyl
-    "HN(CCC1CCNCC1)C(c1ccc(F)cc1)C1CCCCC1",
-    # Cpd12 P2/P3 amine: diethylaminoethyl × cyclohexyl-4-fluorobenzyl
-    "HN(CCN(CC)CC)C(c1ccc(F)cc1)C1CCCCC1",
-    # Cpd13 P2/P3 amine: diethylaminoethyl × cycloheptyl-4-fluorobenzyl
-    "HN(CCN(CC)CC)C(c1ccc(F)cc1)C1CCCCCC1",
-]
-
-
-def _prefilter_p23_by_similarity(p23_dict, min_sim, radius=2, fp_size=1024):
-    """Return a subset of p23_dict keeping entries with Tanimoto >= min_sim
-    to any of the _P23_REFERENCE_SMILES.
-
-    Rational basis: TgCPL's S2 pocket is acidic (Glu75/Asp218/Asp78).
-    High-selectivity leads carry a basic amine P2 that contacts these residues,
-    plus a bulky cycloalkyl P3 that sterically forces selectivity over HsCPL's
-    wider, hydrophobic S2.  Filtering the 10+ M P2/P3 pool to fragments that
-    resemble these patterns before assembly reduces the combinatorial explosion
-    by 10-50x with minimal loss of on-target chemistry.
-
-    Args:
-        p23_dict : {name: smiles} P2/P3 secondary amine pool
-        min_sim  : Tanimoto threshold (0.15-0.25 is a practical range)
-        radius   : Morgan FP radius (must match downstream fingerprinting)
-        fp_size  : Morgan FP bit width
-
-    Returns:
-        kept : {name: smiles} filtered subset
-    """
-    import time as _time
-    t0 = _time.perf_counter()
-
-    # Build reference fps
-    ref_fps = []
-    for smi in _P23_REFERENCE_SMILES:
-        mol = Chem.MolFromSmiles(smi)
-        if mol is not None:
-            ref_fps.append(AllChem.GetMorganFingerprintAsBitVect(mol, radius, fp_size))
-    if not ref_fps:
-        print("  WARNING: could not parse any reference SMILES; skipping prefilter.")
-        return p23_dict
-
-    kept = {}
-    n = len(p23_dict)
-    for i, (key, smi) in enumerate(p23_dict.items()):
-        mol = Chem.MolFromSmiles(smi)
-        if mol is None:
-            continue
-        fp   = AllChem.GetMorganFingerprintAsBitVect(mol, radius, fp_size)
-        sims = DataStructs.BulkTanimotoSimilarity(fp, ref_fps)
-        if max(sims) >= min_sim:
-            kept[key] = smi
-        if (i + 1) % 500_000 == 0:
-            elapsed = _time.perf_counter() - t0
-            print(f"    prefilter: {i+1:>8,}/{n:,}  kept so far: {len(kept):,}  "
-                  f"({elapsed:.0f}s)", flush=True)
-
-    elapsed = _time.perf_counter() - t0
-    print(f"    prefilter done in {elapsed:.1f}s: "
-          f"{n:,} → {len(kept):,} P2/P3 entries "
-          f"(sim >= {min_sim}, {100*len(kept)/max(n,1):.1f}% retained)")
-    return kept
 
 now = datetime.datetime.now()
 
@@ -627,12 +557,6 @@ def main(args):
                          before_post, len(p23_sec_amines))
     log_pool(p23_sec_amines, 'p23_secondary_amines', out_dir)
 
-    # ── 6b. Optional P2/P3 similarity pre-filter ─────────────────────────────
-    if args.prefilter_p23_sim is not None:
-        print(f"\n── P2/P3 reference pre-filter (sim >= {args.prefilter_p23_sim}) ────────────")
-        p23_sec_amines = _prefilter_p23_by_similarity(
-            p23_sec_amines, args.prefilter_p23_sim
-        )
 
     # ── 7. Assembly (parallelised) ────────────────────────────────────────────
     print("\n── Assembly ─────────────────────────────────────────────────────────")
@@ -648,17 +572,14 @@ def main(args):
                              shared=assemble_shared)
     print(f"    → {len(result_rows):,} products")
 
-    # Pipeline B: P1 = alcohol (skippable with --skip_alcohol_p1)
-    if getattr(args, 'skip_alcohol_p1', False):
-        print("  Pipeline B (P1=alcohol): SKIPPED (--skip_alcohol_p1)")
-    else:
-        b_tasks  = list(alcohols.items())
-        before_b = len(result_rows)
-        print(f"  Pipeline B (P1=alcohol): {len(alcohols):,} × {len(p23_sec_amines):,} "
+    # Pipeline B: P1 = alcohol
+    b_tasks  = list(alcohols.items())
+    before_b = len(result_rows)
+    print(f"  Pipeline B (P1=alcohol): {len(alcohols):,} × {len(p23_sec_amines):,} "
               f"= {len(alcohols)*len(p23_sec_amines):,} pairs …")
-        result_rows += _parallel(_worker_assemble_alcohol_p1, b_tasks, workers,
-                                 shared=assemble_shared)
-        print(f"    → {len(result_rows)-before_b:,} products")
+    result_rows += _parallel(_worker_assemble_alcohol_p1, b_tasks, workers,
+                             shared=assemble_shared)
+    print(f"    → {len(result_rows)-before_b:,} products")
 
     result_df = pd.DataFrame(result_rows)
     print(f"\n  Total assembled: {len(result_df):,}")
@@ -704,15 +625,5 @@ if __name__ == '__main__':
     parser.add_argument('--workers', type=int, default=max(1, cpu_count() - 1),
                         help='Number of parallel worker processes '
                              f'(default: cpu_count-1 = {max(1, cpu_count()-1)}).')
-    parser.add_argument('--prefilter_p23_sim', type=float, default=None,
-                        help='(optional) Pre-assembly P2/P3 similarity filter: keep only '
-                             'P2/P3 intermediates with Tanimoto >= this value to known TgCPL '
-                             'lead P2/P3 fragments (Cpd18/12/13).  Recommended: 0.15-0.25. '
-                             'Reduces the 10M+ P2/P3 pool before assembly, giving a large '
-                             'speedup at the cost of some coverage.')
-    parser.add_argument('--skip_alcohol_p1', action='store_true',
-                        help='(optional) Skip Pipeline B (P1=alcohol × P2/P3). '
-                             'Pipeline B is ~4x larger than A and can be deferred to a '
-                             'second run or GreatLakes SLURM job.')
     args = parser.parse_args()
     main(args)
