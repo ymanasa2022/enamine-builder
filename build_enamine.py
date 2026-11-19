@@ -274,7 +274,10 @@ def _init_worker(shared: dict):
 
 
 def _worker_reductive_am(amine_kv):
-    """One primary amine × all aldehydes → [(name, smiles), …]"""
+    """One primary amine × all aldehydes → [(name, smiles), …]
+    Applies filter_post_p23 before returning to avoid sending large
+    volumes of data back over the multiprocessing pipe.
+    """
     amine_key, amine_smi = amine_kv
     amine = Chem.MolFromSmiles(amine_smi)
     if amine is None:
@@ -289,14 +292,19 @@ def _worker_reductive_am(amine_kv):
             if prods:
                 mol = Chem.MolFromSmiles(Chem.MolToSmiles(prods[0][0]))
                 if mol:
-                    out.append((f'{amine_key}_{ald_key}', Chem.MolToSmiles(mol)))
+                    smi = Chem.MolToSmiles(mol)
+                    if filter_post_p23(smi):
+                        out.append((f'{amine_key}_{ald_key}', smi))
         except Exception:
             pass
     return out
 
 
 def _worker_sn2(amine_kv):
-    """One primary amine × all halides → [(name, smiles), …]"""
+    """One primary amine × all halides → [(name, smiles), …]
+    Applies filter_post_p23 before returning to avoid sending large
+    volumes of data back over the multiprocessing pipe.
+    """
     amine_key, amine_smi = amine_kv
     amine = Chem.MolFromSmiles(amine_smi)
     if amine is None:
@@ -311,7 +319,9 @@ def _worker_sn2(amine_kv):
             if prods:
                 mol = Chem.MolFromSmiles(Chem.MolToSmiles(prods[0][0]))
                 if mol:
-                    out.append((f'{amine_key}_{hal_key}', Chem.MolToSmiles(mol)))
+                    smi = Chem.MolToSmiles(mol)
+                    if filter_post_p23(smi):
+                        out.append((f'{amine_key}_{hal_key}', smi))
         except Exception:
             pass
     return out
