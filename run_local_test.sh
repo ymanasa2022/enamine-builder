@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Quick local end-to-end test for build_enamine.py.
+# Quick local end-to-end test for 0_build_enamine.py.
 # Creates small synthetic SDF fixtures, runs the pipeline with 2 workers,
 # and verifies all output molecules contain the triazine+nitrile scaffold.
 #
@@ -69,8 +69,8 @@ fi
 OUT_DIR="$TEST_DIR/out"
 
 echo ""
-echo "▶  Running build_enamine.py with --workers 2 ..."
-python3 "$SCRIPT_DIR/build_enamine.py" \
+echo "▶  Running 0_build_enamine.py with --workers 2 ..."
+python3 "$SCRIPT_DIR/0_build_enamine.py" \
     --enamine_dir "$ENAMINE_DIR" \
     --alcohols  "$ALC" \
     --aldehydes "$ALD" \
