@@ -37,11 +37,11 @@ from multiprocessing import Pool, cpu_count
 # ---------------------------------------------------------------------------
 _P23_REFERENCE_SMILES = [
     # Cpd18 P2/P3 amine: piperidinylethyl × cyclohexyl-4-fluorobenzyl
-    "HN(CCC1CCNCC1)C(c1ccc(F)cc1)C1CCCCC1",
+    "[NH](CCC1CCNCC1)C(c1ccc(F)cc1)C1CCCCC1",
     # Cpd12 P2/P3 amine: diethylaminoethyl × cyclohexyl-4-fluorobenzyl
-    "HN(CCN(CC)CC)C(c1ccc(F)cc1)C1CCCCC1",
+    "[NH](CCN(CC)CC)C(c1ccc(F)cc1)C1CCCCC1",
     # Cpd13 P2/P3 amine: diethylaminoethyl × cycloheptyl-4-fluorobenzyl
-    "HN(CCN(CC)CC)C(c1ccc(F)cc1)C1CCCCCC1",
+    "[NH](CCN(CC)CC)C(c1ccc(F)cc1)C1CCCCCC1",
 ]
 
 
