@@ -79,6 +79,7 @@ def run_umap(pca_features, n_neighbors=50, min_dist=0.0, seed=42):
         n_neighbors=n_neighbors,
         min_dist=min_dist,
         metric='euclidean',    # PCA features are continuous
+        compatibility_layout=True,  # keep 0.5.x layout; silence FutureWarning in umap-learn 0.6+
         n_jobs=-1,
         random_state=seed,
     )
