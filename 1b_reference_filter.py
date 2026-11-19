@@ -58,7 +58,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from rdkit import Chem, DataStructs
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, rdFingerprintGenerator
 
 # ---------------------------------------------------------------------------
 # Reference leads from: TgCPL Main Draft 6 / ShEPhERD-for-TgCPL leads.tsv
@@ -81,7 +81,7 @@ _MORPHOLINE_SMARTS    = "N1CCOCC1"
 
 
 def _morgan_fp(mol: Chem.Mol, radius: int, fp_size: int) -> DataStructs.ExplicitBitVect:
-    return AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=fp_size)
+    return rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=fp_size).GetFingerprint(mol)
 
 
 def build_ref_fps(

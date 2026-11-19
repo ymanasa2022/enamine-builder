@@ -19,7 +19,7 @@ Speed notes
 """
 
 from rdkit import Chem, DataStructs
-from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors
+from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors, rdFingerprintGenerator
 import argparse
 import pandas as pd
 import os
@@ -73,7 +73,7 @@ def _prefilter_p23_by_similarity(p23_dict, min_sim, radius=2, fp_size=1024):
     for smi in _P23_REFERENCE_SMILES:
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
-            ref_fps.append(AllChem.GetMorganFingerprintAsBitVect(mol, radius, fp_size))
+            ref_fps.append(rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=fp_size).GetFingerprint(mol))
     if not ref_fps:
         print("  WARNING: could not parse any reference SMILES; skipping prefilter.")
         return p23_dict
@@ -84,7 +84,7 @@ def _prefilter_p23_by_similarity(p23_dict, min_sim, radius=2, fp_size=1024):
         mol = Chem.MolFromSmiles(smi)
         if mol is None:
             continue
-        fp   = AllChem.GetMorganFingerprintAsBitVect(mol, radius, fp_size)
+        fp   = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=fp_size).GetFingerprint(mol)
         sims = DataStructs.BulkTanimotoSimilarity(fp, ref_fps)
         if max(sims) >= min_sim:
             kept[key] = smi
